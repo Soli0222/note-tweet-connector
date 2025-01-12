@@ -60,11 +60,11 @@ spec:
                 secretKeyRef:
                   name: note-tweet-connector-secret
                   key: ACCESS_TOKEN_SECRET
-            - name: IFTTT_EVENT_NAME
+            - name: IFTTT_EVENT
               valueFrom:
                 secretKeyRef:
                   name: note-tweet-connector-secret
-                  key: IFTTT_EVENT_NAME
+                  key: IFTTT_EVENT
             - name: IFTTT_KEY
               valueFrom:
                 secretKeyRef:
