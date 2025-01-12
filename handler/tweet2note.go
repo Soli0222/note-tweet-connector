@@ -6,10 +6,29 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 )
 
+type payloadTweetData struct {
+	Body struct {
+		Tweet struct {
+			Text string `json:"text"`
+			Url  string `json:"url"`
+		} `json:"tweet"`
+	} `json:"body"`
+}
+
 func Tweet2NoteHandler(data []byte) error {
-	datastr := string(data)
+	payload, err := parseTweetPayload(data)
+	if err != nil {
+		slog.Error("Failed to parse payload", slog.Any("error", err))
+		return err
+	}
+
+	if strings.Contains(payload.Body.Tweet.Text, "Noted by:") {
+		slog.Info("Tweet is already noted; skipping")
+		return nil
+	}
 
 	MISSKEY_HOST := os.Getenv("MISSKEY_HOST")
 	if MISSKEY_HOST == "" {
@@ -23,15 +42,22 @@ func Tweet2NoteHandler(data []byte) error {
 		return nil
 	}
 
-	err := Note(MISSKEY_HOST, MISSKEY_TOKEN, datastr)
-	if err != nil {
-		slog.Error("Failed to note", slog.Any("error", err))
+	if err := Note(MISSKEY_HOST, MISSKEY_TOKEN, payload.Body.Tweet.Text+"\n\nTweeted by: "+payload.Body.Tweet.Url); err != nil {
+		slog.Error("Failed to post tweet to Note", slog.Any("error", err))
 		return err
 	}
 
 	slog.Info("Success Tweet to Note")
 
 	return nil
+}
+
+func parseTweetPayload(data []byte) (*payloadTweetData, error) {
+	var payload payloadTweetData
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	return &payload, nil
 }
 
 func Note(host, token, text string) error {

@@ -19,7 +19,7 @@ const (
 	ManageTweetEndpoint = "https://api.twitter.com/2/tweets"
 )
 
-type payloadData struct {
+type payloadNoteData struct {
 	Server string `json:"server"`
 	Body   struct {
 		Note struct {
@@ -33,16 +33,23 @@ type payloadData struct {
 }
 
 func Note2TweetHandler(data []byte) error {
-	payload, err := parsePayload(data)
+	payload, err := parseNotePayload(data)
 	if err != nil {
 		slog.Error("Failed to parse payload", slog.Any("error", err))
 		return err
+	}
+
+	if strings.Contains(payload.Body.Note.Text, "Tweeted by:") {
+		slog.Info("Note is already tweeted; skipping")
+		return nil
 	}
 
 	if payload.Body.Note.Visibility != "public" {
 		slog.Info("Note is not public; skipping")
 		return nil
 	}
+
+	noteURL := fmt.Sprintf("%s/notes/%s", payload.Server, payload.Body.Note.ID)
 
 	var fileURLs []string
 	for _, f := range payload.Body.Note.Files {
@@ -57,7 +64,7 @@ func Note2TweetHandler(data []byte) error {
 		}
 	}
 
-	if err := Post(payload.Body.Note.Text, fileURLs); err != nil {
+	if err := Post(payload.Body.Note.Text+"\n\nNoted by: "+noteURL, fileURLs); err != nil {
 		slog.Error("Failed to post note to Tweet", slog.Any("error", err))
 		return err
 	}
@@ -66,8 +73,8 @@ func Note2TweetHandler(data []byte) error {
 	return nil
 }
 
-func parsePayload(data []byte) (*payloadData, error) {
-	var payload payloadData
+func parseNotePayload(data []byte) (*payloadNoteData, error) {
+	var payload payloadNoteData
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return nil, err
 	}
