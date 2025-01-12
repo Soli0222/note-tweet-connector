@@ -64,12 +64,18 @@ func Note2TweetHandler(data []byte) error {
 		}
 	}
 
-	if err := Post(payload.Body.Note.Text+"\n\nNoted by: "+noteURL, fileURLs); err != nil {
-		slog.Error("Failed to post note to Tweet", slog.Any("error", err))
-		return err
+	if len(fileURLs) == 0 {
+		if err := Post(payload.Body.Note.Text + "\n\nNoted by: " + noteURL); err != nil {
+			slog.Error("Failed to post note to Tweet", slog.Any("error", err))
+			return err
+		}
+	} else {
+		if err := PostWithMedia(payload.Body.Note.Text+"\n\nNoted by: "+noteURL, fileURLs); err != nil {
+			slog.Error("Failed to post note to Tweet", slog.Any("error", err))
+			return err
+		}
 	}
 
-	slog.Info("Success: Note posted to Tweet")
 	return nil
 }
 
@@ -93,7 +99,49 @@ func loadTwitterEnv() (string, string, string, string, error) {
 	return apiKey, apiKeySecret, accessToken, accessTokenSecret, nil
 }
 
-func Post(text string, fileURLs []string) error {
+func Post(text string) error {
+	IFTTT_EVENT := os.Getenv("IFTTT_EVENT")
+	if IFTTT_EVENT == "" {
+		slog.Error("IFTTT event name not set")
+		return fmt.Errorf("IFTTT event name not set")
+	}
+
+	IFTTT_KEY := os.Getenv("IFTTT_KEY")
+	if IFTTT_KEY == "" {
+		slog.Error("IFTTT key not set")
+		return fmt.Errorf("IFTTT key not set")
+	}
+
+	IFTTTEndpoint := "https://maker.ifttt.com/trigger/" + IFTTT_EVENT + "/with/key/" + IFTTT_KEY
+
+	payload := map[string]string{
+		"value1": text,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		slog.Error("Error marshaling IFTTT payload", slog.Any("error", err))
+		return err
+	}
+
+	resp, err := http.Post(IFTTTEndpoint, "application/json", bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		slog.Error("Error sending POST request to IFTTT", slog.Any("error", err))
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		slog.Error("Non-OK response from IFTTT", slog.Int("status", resp.StatusCode))
+		return fmt.Errorf("IFTTT POST request failed with status %d", resp.StatusCode)
+	}
+
+	slog.Info("Success: Note posted to Tweet via IFTTT")
+
+	return nil
+}
+
+func PostWithMedia(text string, fileURLs []string) error {
 	ak, aks, at, ats, err := loadTwitterEnv()
 	if err != nil {
 		slog.Error("Error loading Twitter API keys", slog.Any("error", err))
@@ -104,11 +152,12 @@ func Post(text string, fileURLs []string) error {
 	token := oauth1.NewToken(at, ats)
 	httpClient := config.Client(oauth1.NoContext, token)
 
-	var mediaIDs []string
 	limit := len(fileURLs)
 	if limit > 4 {
 		limit = 4
 	}
+
+	var mediaIDs []string
 	for i := 0; i < limit; i++ {
 		mediaID, err := uploadMediaFromURL(httpClient, fileURLs[i])
 		if err != nil {
@@ -143,6 +192,13 @@ func Post(text string, fileURLs []string) error {
 		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		slog.Error("Non-OK response from Twitter", slog.Int("status", resp.StatusCode))
+		return err
+	}
+
+	slog.Info("Success: Note posted to Tweet with media")
 
 	return nil
 }
