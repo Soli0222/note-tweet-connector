@@ -11,7 +11,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-var version = "1.2.0"
+var version = "1.3.0"
 
 func webhookHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
