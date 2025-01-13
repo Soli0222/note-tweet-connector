@@ -39,6 +39,11 @@ func Note2TweetHandler(data []byte) error {
 		return err
 	}
 
+	if payload.Body.Note.Text == "" || payload.Body.Note.Text == "null" {
+		slog.Info("Note has no text; skipping")
+		return nil
+	}
+
 	if strings.Contains(payload.Body.Note.Text, "Tweeted by:") {
 		slog.Info("Note is already tweeted; skipping")
 		return nil
