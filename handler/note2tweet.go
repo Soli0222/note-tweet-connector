@@ -81,13 +81,20 @@ func Note2TweetHandler(data []byte) error {
 		}
 	}
 
+	var suffix string
+	if strings.Contains(noteText, "#PsrPlaying") {
+		suffix = ""
+	} else {
+		suffix = "\n\nNoted by: " + noteURL
+	}
+
 	if len(fileURLs) == 0 {
-		if err := Post(noteText + "\n\nNoted by: " + noteURL); err != nil {
+		if err := Post(noteText + suffix); err != nil {
 			slog.Error("Failed to post note to Tweet", slog.Any("error", err))
 			return err
 		}
 	} else {
-		if err := PostWithMedia(noteText+"\n\nNoted by: "+noteURL, fileURLs); err != nil {
+		if err := PostWithMedia(noteText+suffix, fileURLs); err != nil {
 			slog.Error("Failed to post note to Tweet", slog.Any("error", err))
 			return err
 		}

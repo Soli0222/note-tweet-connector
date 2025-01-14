@@ -30,6 +30,11 @@ func Tweet2NoteHandler(data []byte) error {
 		return nil
 	}
 
+	if strings.Contains(payload.Body.Tweet.Text, "#PsrPlaying") {
+		slog.Info("Tweet is a #PsrPlaying; skipping")
+		return nil
+	}
+
 	MISSKEY_HOST := os.Getenv("MISSKEY_HOST")
 	if MISSKEY_HOST == "" {
 		slog.Error("MISSKEY_HOST is not set")
