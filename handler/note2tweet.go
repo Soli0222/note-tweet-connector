@@ -28,6 +28,14 @@ type payloadNoteData struct {
 			LocalOnly  bool          `json:"localOnly"`
 			Files      []interface{} `json:"files"`
 			Text       string        `json:"text"`
+			Renote     struct {
+				ID   string `json:"id"`
+				Text string `json:"text"`
+				User struct {
+					Host     string `json:"host"`
+					Username string `json:"username"`
+				}
+			} `json:"renote"`
 		} `json:"note"`
 	} `json:"body"`
 }
@@ -39,12 +47,16 @@ func Note2TweetHandler(data []byte) error {
 		return err
 	}
 
-	if payload.Body.Note.Text == "" || payload.Body.Note.Text == "null" {
-		slog.Info("Note has no text; skipping")
-		return nil
+	noteText := payload.Body.Note.Text
+	if noteText == "" || noteText == "null" {
+		renoteHost := payload.Body.Note.Renote.User.Host
+		if renoteHost == "" {
+			renoteHost = os.Getenv("MISSKEY_HOST")
+		}
+		noteText = "RN [at]" + payload.Body.Note.Renote.User.Username + "[at]" + renoteHost + "\n\n" + payload.Body.Note.Renote.Text
 	}
 
-	if strings.Contains(payload.Body.Note.Text, "Tweeted by:") {
+	if strings.Contains(noteText, "Tweeted by:") {
 		slog.Info("Note is already tweeted; skipping")
 		return nil
 	}
@@ -70,12 +82,12 @@ func Note2TweetHandler(data []byte) error {
 	}
 
 	if len(fileURLs) == 0 {
-		if err := Post(payload.Body.Note.Text + "\n\nNoted by: " + noteURL); err != nil {
+		if err := Post(noteText + "\n\nNoted by: " + noteURL); err != nil {
 			slog.Error("Failed to post note to Tweet", slog.Any("error", err))
 			return err
 		}
 	} else {
-		if err := PostWithMedia(payload.Body.Note.Text+"\n\nNoted by: "+noteURL, fileURLs); err != nil {
+		if err := PostWithMedia(noteText+"\n\nNoted by: "+noteURL, fileURLs); err != nil {
 			slog.Error("Failed to post note to Tweet", slog.Any("error", err))
 			return err
 		}
