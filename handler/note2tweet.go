@@ -40,7 +40,8 @@ type payloadNoteData struct {
 	} `json:"body"`
 }
 
-func Note2TweetHandler(data []byte) error {
+// この引数を関数シグネチャに追加
+func Note2TweetHandler(data []byte, tracker *ContentTracker) error {
 	payload, err := parseNotePayload(data)
 	if err != nil {
 		slog.Error("Failed to parse payload", slog.Any("error", err))
@@ -56,17 +57,16 @@ func Note2TweetHandler(data []byte) error {
 		noteText = "RN [at]" + payload.Body.Note.Renote.User.Username + "[at]" + renoteHost + "\n\n" + payload.Body.Note.Renote.Text
 	}
 
-	if strings.Contains(noteText, "Tweeted by:") {
-		slog.Info("Note is already tweeted; skipping")
+	// このコンテンツが既に処理済みかチェック
+	if tracker.IsProcessed(noteText) {
+		slog.Info("ノートは既に処理済み、スキップします")
 		return nil
 	}
 
 	if payload.Body.Note.Visibility != "public" {
-		slog.Info("Note is not public; skipping")
+		slog.Info("ノートがpublicではありません、スキップします")
 		return nil
 	}
-
-	noteURL := fmt.Sprintf("%s/notes/%s", payload.Server, payload.Body.Note.ID)
 
 	var fileURLs []string
 	for _, f := range payload.Body.Note.Files {
@@ -81,23 +81,18 @@ func Note2TweetHandler(data []byte) error {
 		}
 	}
 
-	var suffix string
-	if strings.Contains(noteText, "#PsrPlaying") {
-		suffix = ""
+	if len(fileURLs) == 0 {
+		err = Post(noteText)
 	} else {
-		suffix = "\n\nNoted by: " + noteURL
+		err = PostWithMedia(noteText, fileURLs)
 	}
 
-	if len(fileURLs) == 0 {
-		if err := Post(noteText + suffix); err != nil {
-			slog.Error("Failed to post note to Tweet", slog.Any("error", err))
-			return err
-		}
+	if err == nil {
+		// 投稿が成功した場合のみ処理済みとしてマーク
+		tracker.MarkProcessed(noteText)
 	} else {
-		if err := PostWithMedia(noteText+suffix, fileURLs); err != nil {
-			slog.Error("Failed to post note to Tweet", slog.Any("error", err))
-			return err
-		}
+		slog.Error("ノートをツイートに投稿できませんでした", slog.Any("error", err))
+		return err
 	}
 
 	return nil

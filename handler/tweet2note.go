@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strings"
 )
 
 type payloadTweetData struct {
@@ -18,41 +17,44 @@ type payloadTweetData struct {
 	} `json:"body"`
 }
 
-func Tweet2NoteHandler(data []byte) error {
+func Tweet2NoteHandler(data []byte, tracker *ContentTracker) error {
 	payload, err := parseTweetPayload(data)
 	if err != nil {
 		slog.Error("Failed to parse payload", slog.Any("error", err))
 		return err
 	}
 
-	if strings.Contains(payload.Body.Tweet.Text, "Noted by:") {
-		slog.Info("Tweet is already noted; skipping")
-		return nil
-	}
+	tweetText := payload.Body.Tweet.Text
 
-	if strings.Contains(payload.Body.Tweet.Text, "#PsrPlaying") {
-		slog.Info("Tweet is a #PsrPlaying; skipping")
+	// このコンテンツが既に処理済みかチェック
+	if tracker.IsProcessed(tweetText) {
+		slog.Info("ツイートは既に処理済み、スキップします")
 		return nil
 	}
 
 	MISSKEY_HOST := os.Getenv("MISSKEY_HOST")
 	if MISSKEY_HOST == "" {
-		slog.Error("MISSKEY_HOST is not set")
+		slog.Error("MISSKEY_HOSTが設定されていません")
 		return nil
 	}
 
 	MISSKEY_TOKEN := os.Getenv("MISSKEY_TOKEN")
 	if MISSKEY_TOKEN == "" {
-		slog.Error("MISSKEY_TOKEN is not set")
+		slog.Error("MISSKEY_TOKENが設定されていません")
 		return nil
 	}
 
-	if err := Note(MISSKEY_HOST, MISSKEY_TOKEN, payload.Body.Tweet.Text+"\n\nTweeted by: "+payload.Body.Tweet.Url); err != nil {
-		slog.Error("Failed to post tweet to Note", slog.Any("error", err))
+	err = Note(MISSKEY_HOST, MISSKEY_TOKEN, tweetText)
+
+	if err == nil {
+		// 投稿が成功した場合のみ処理済みとしてマーク
+		tracker.MarkProcessed(tweetText)
+	} else {
+		slog.Error("ツイートをノートに投稿できませんでした", slog.Any("error", err))
 		return err
 	}
 
-	slog.Info("Success Tweet to Note")
+	slog.Info("ツイートからノートへの転送に成功しました")
 
 	return nil
 }

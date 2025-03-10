@@ -6,12 +6,17 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Soli0222/note-tweet-connector/handler"
 	"github.com/joho/godotenv"
 )
 
-var version = "1.4.0"
+var (
+	version = "1.5.0"
+	// 24時間の有効期限でコンテンツトラッカーを初期化
+	contentTracker = handler.NewContentTracker(24 * time.Hour)
+)
 
 func webhookHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -35,7 +40,7 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		err = handler.Note2TweetHandler(body)
+		err = handler.Note2TweetHandler(body, contentTracker)
 		if err != nil {
 			http.Error(w, "Failed to handle request", http.StatusInternalServerError)
 			slog.Error("Failed to handle request", slog.Any("error", err))
@@ -57,7 +62,7 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		err = handler.Tweet2NoteHandler(body)
+		err = handler.Tweet2NoteHandler(body, contentTracker)
 		if err != nil {
 			http.Error(w, "Failed to handle request", http.StatusInternalServerError)
 			slog.Error("Failed to handle request", slog.Any("error", err))
