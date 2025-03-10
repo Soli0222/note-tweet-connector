@@ -40,7 +40,6 @@ type payloadNoteData struct {
 	} `json:"body"`
 }
 
-// この引数を関数シグネチャに追加
 func Note2TweetHandler(data []byte, tracker *ContentTracker) error {
 	payload, err := parseNotePayload(data)
 	if err != nil {
@@ -57,14 +56,14 @@ func Note2TweetHandler(data []byte, tracker *ContentTracker) error {
 		noteText = "RN [at]" + payload.Body.Note.Renote.User.Username + "[at]" + renoteHost + "\n\n" + payload.Body.Note.Renote.Text
 	}
 
-	// このコンテンツが既に処理済みかチェック
+	// Check if this content has already been processed
 	if tracker.IsProcessed(noteText) {
-		slog.Info("ノートは既に処理済み、スキップします")
+		slog.Info("Note already processed, skipping")
 		return nil
 	}
 
 	if payload.Body.Note.Visibility != "public" {
-		slog.Info("ノートがpublicではありません、スキップします")
+		slog.Info("Note is not public, skipping")
 		return nil
 	}
 
@@ -88,10 +87,10 @@ func Note2TweetHandler(data []byte, tracker *ContentTracker) error {
 	}
 
 	if err == nil {
-		// 投稿が成功した場合のみ処理済みとしてマーク
+		// Mark as processed only if posting was successful
 		tracker.MarkProcessed(noteText)
 	} else {
-		slog.Error("ノートをツイートに投稿できませんでした", slog.Any("error", err))
+		slog.Error("Failed to post note to tweet", slog.Any("error", err))
 		return err
 	}
 
