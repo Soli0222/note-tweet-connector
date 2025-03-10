@@ -9,31 +9,31 @@ import (
 	"time"
 )
 
-// ContentTracker はループ防止のために処理済みコンテンツのハッシュをキャッシュ管理する
+// ContentTracker caches hashes of processed content to prevent loops
 type ContentTracker struct {
-	processedHashes sync.Map      // スレッドセーフなハッシュ保存用マップ
-	expiryDuration  time.Duration // ハッシュをメモリに保持する期間
+	processedHashes sync.Map      // Thread-safe map for storing hashes
+	expiryDuration  time.Duration // Duration to keep hashes in memory
 }
 
-// ハッシュ定数
+// Hash constants
 const (
-	// プラットフォーム間で正規化するために、ハッシュ化前にこの長さに切り詰める
+	// Truncate to this length before hashing to normalize across platforms
 	maxContentLength = 280
 )
 
-// NewContentTracker は指定した期間後にエントリが期限切れになる新しいコンテンツトラッカーを作成する
+// NewContentTracker creates a new content tracker with entries expiring after the specified duration
 func NewContentTracker(expiryDuration time.Duration) *ContentTracker {
 	tracker := &ContentTracker{
 		expiryDuration: expiryDuration,
 	}
 
-	// 期限切れエントリを削除するクリーンアッププロセスを開始
+	// Start cleanup process for expired entries
 	go tracker.periodicCleanup()
 
 	return tracker
 }
 
-// periodicCleanup は1分ごとに期限切れのエントリを削除する
+// periodicCleanup removes expired entries every minute
 func (c *ContentTracker) periodicCleanup() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
@@ -44,21 +44,21 @@ func (c *ContentTracker) periodicCleanup() {
 			timestamp, ok := value.(time.Time)
 			if !ok || now.Sub(timestamp) > c.expiryDuration {
 				c.processedHashes.Delete(key)
-				slog.Debug("期限切れのコンテンツハッシュを削除しました", slog.String("hash", key.(string)))
+				slog.Debug("Removed expired content hash", slog.String("hash", key.(string)))
 			}
 			return true
 		})
 	}
 }
 
-// computeHash はコンテンツの安定したハッシュを生成する
+// computeHash generates a stable hash for the content
 func (c *ContentTracker) computeHash(content string) string {
-	// 空白を削除し、小文字化し、改行を除去することでコンテンツを正規化
+	// Normalize content by lowercasing, replacing newlines, and trimming whitespace
 	normalized := strings.ToLower(content)
 	normalized = strings.ReplaceAll(normalized, "\n", " ")
 	normalized = strings.TrimSpace(normalized)
 
-	// 署名を追加する可能性があるプラットフォーム間で正規化するために、先頭部分のみ使用
+	// Use only the beginning to normalize across platforms that might add signatures
 	if len(normalized) > maxContentLength {
 		normalized = normalized[:maxContentLength]
 	}
@@ -68,20 +68,20 @@ func (c *ContentTracker) computeHash(content string) string {
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
-// IsProcessed はコンテンツが最近処理されたかどうかをチェックする
+// IsProcessed checks if content has been recently processed
 func (c *ContentTracker) IsProcessed(content string) bool {
 	hash := c.computeHash(content)
 
 	if _, exists := c.processedHashes.Load(hash); exists {
-		slog.Info("このコンテンツはすでに処理済みです", slog.String("hash", hash))
+		slog.Info("Content already processed", slog.String("hash", hash))
 		return true
 	}
 	return false
 }
 
-// MarkProcessed はコンテンツを処理済みとしてマークする
+// MarkProcessed marks content as processed
 func (c *ContentTracker) MarkProcessed(content string) {
 	hash := c.computeHash(content)
 	c.processedHashes.Store(hash, time.Now())
-	slog.Debug("コンテンツを処理済みとしてマークしました", slog.String("hash", hash))
+	slog.Debug("Content marked as processed", slog.String("hash", hash))
 }

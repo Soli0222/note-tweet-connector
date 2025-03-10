@@ -26,35 +26,35 @@ func Tweet2NoteHandler(data []byte, tracker *ContentTracker) error {
 
 	tweetText := payload.Body.Tweet.Text
 
-	// このコンテンツが既に処理済みかチェック
+	// Check if this content has already been processed
 	if tracker.IsProcessed(tweetText) {
-		slog.Info("ツイートは既に処理済み、スキップします")
+		slog.Info("Tweet already processed, skipping")
 		return nil
 	}
 
 	MISSKEY_HOST := os.Getenv("MISSKEY_HOST")
 	if MISSKEY_HOST == "" {
-		slog.Error("MISSKEY_HOSTが設定されていません")
+		slog.Error("MISSKEY_HOST is not set")
 		return nil
 	}
 
 	MISSKEY_TOKEN := os.Getenv("MISSKEY_TOKEN")
 	if MISSKEY_TOKEN == "" {
-		slog.Error("MISSKEY_TOKENが設定されていません")
+		slog.Error("MISSKEY_TOKEN is not set")
 		return nil
 	}
 
 	err = Note(MISSKEY_HOST, MISSKEY_TOKEN, tweetText)
 
 	if err == nil {
-		// 投稿が成功した場合のみ処理済みとしてマーク
+		// Mark as processed only if posting was successful
 		tracker.MarkProcessed(tweetText)
 	} else {
-		slog.Error("ツイートをノートに投稿できませんでした", slog.Any("error", err))
+		slog.Error("Failed to post tweet to note", slog.Any("error", err))
 		return err
 	}
 
-	slog.Info("ツイートからノートへの転送に成功しました")
+	slog.Info("Successfully forwarded tweet to note")
 
 	return nil
 }

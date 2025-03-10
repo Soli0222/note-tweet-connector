@@ -13,8 +13,7 @@ import (
 )
 
 var (
-	version = "1.5.0"
-	// 24時間の有効期限でコンテンツトラッカーを初期化
+	version        = "1.5.0"
 	contentTracker = handler.NewContentTracker(24 * time.Hour)
 )
 
