@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
 )
 
 type payloadTweetData struct {
@@ -17,6 +18,9 @@ type payloadTweetData struct {
 	} `json:"body"`
 }
 
+// RNとat記号の検出用正規表現
+var rnAtPattern = regexp.MustCompile(`^RN\s*\[at\]`)
+
 func Tweet2NoteHandler(data []byte, tracker *ContentTracker) error {
 	payload, err := parseTweetPayload(data)
 	if err != nil {
@@ -25,6 +29,12 @@ func Tweet2NoteHandler(data []byte, tracker *ContentTracker) error {
 	}
 
 	tweetText := payload.Body.Tweet.Text
+
+	// "RN [at]" で始まるツイートをスキップ
+	if rnAtPattern.MatchString(tweetText) {
+		slog.Info("Skipping RN [at] tweet", slog.String("text", tweetText[:20]))
+		return nil
+	}
 
 	// Check if this content has already been processed
 	if tracker.IsProcessed(tweetText) {

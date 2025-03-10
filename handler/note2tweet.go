@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/dghubble/oauth1"
@@ -18,6 +19,9 @@ const (
 	UploadMediaEndpoint = "https://upload.twitter.com/1.1/media/upload.json"
 	ManageTweetEndpoint = "https://api.twitter.com/2/tweets"
 )
+
+// RTと@記号の検出用正規表現
+var rtAtPattern = regexp.MustCompile(`^RT\s*@`)
 
 type payloadNoteData struct {
 	Server string `json:"server"`
@@ -54,6 +58,12 @@ func Note2TweetHandler(data []byte, tracker *ContentTracker) error {
 			renoteHost = os.Getenv("MISSKEY_HOST")
 		}
 		noteText = "RN [at]" + payload.Body.Note.Renote.User.Username + "[at]" + renoteHost + "\n\n" + payload.Body.Note.Renote.Text
+	}
+
+	// "RT @" で始まるノートをスキップ
+	if rtAtPattern.MatchString(noteText) {
+		slog.Info("Skipping RT @ note", slog.String("text", noteText[:20]))
+		return nil
 	}
 
 	// Check if this content has already been processed
