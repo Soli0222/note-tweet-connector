@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,12 @@ type ContentTracker struct {
 const (
 	// Truncate to this length before hashing to normalize across platforms
 	maxContentLength = 280
+)
+
+// Regular expressions for URL detection
+var (
+	urlPattern = regexp.MustCompile(`https?://[^\s]+`)
+	tcoPattern = regexp.MustCompile(`https?://t\.co/\w+`)
 )
 
 // NewContentTracker creates a new content tracker with entries expiring after the specified duration
@@ -53,12 +60,15 @@ func (c *ContentTracker) periodicCleanup() {
 
 // computeHash generates a stable hash for the content
 func (c *ContentTracker) computeHash(content string) string {
-	// Normalize content by lowercasing, replacing newlines, and trimming whitespace
+	// 小文字化、改行の削除、空白のトリミングによる正規化
 	normalized := strings.ToLower(content)
 	normalized = strings.ReplaceAll(normalized, "\n", " ")
 	normalized = strings.TrimSpace(normalized)
 
-	// Use only the beginning to normalize across platforms that might add signatures
+	normalized = tcoPattern.ReplaceAllString(normalized, "[URL]")
+	normalized = urlPattern.ReplaceAllString(normalized, "[URL]")
+
+	// プラットフォーム間で統一するために先頭部分のみを使用
 	if len(normalized) > maxContentLength {
 		normalized = normalized[:maxContentLength]
 	}
