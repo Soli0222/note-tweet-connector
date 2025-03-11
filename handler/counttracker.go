@@ -25,7 +25,6 @@ const (
 // Regular expressions for URL detection
 var (
 	urlPattern = regexp.MustCompile(`https?://[^\s]+`)
-	tcoPattern = regexp.MustCompile(`https?://t\.co/\w+`)
 )
 
 // NewContentTracker creates a new content tracker with entries expiring after the specified duration
@@ -65,8 +64,11 @@ func (c *ContentTracker) computeHash(content string) string {
 	normalized = strings.ReplaceAll(normalized, "\n", " ")
 	normalized = strings.TrimSpace(normalized)
 
-	normalized = tcoPattern.ReplaceAllString(normalized, "[URL]")
-	normalized = urlPattern.ReplaceAllString(normalized, "[URL]")
+	// URLを削除（すべてのURLを一括で処理）
+	normalized = urlPattern.ReplaceAllString(normalized, "")
+
+	// 連続する空白を1つに置換
+	normalized = strings.Join(strings.Fields(normalized), " ")
 
 	// プラットフォーム間で統一するために先頭部分のみを使用
 	if len(normalized) > maxContentLength {
