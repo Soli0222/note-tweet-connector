@@ -14,7 +14,7 @@ import (
 
 var (
 	version        = "1.6.0"
-	contentTracker = handler.NewContentTracker(24 * time.Hour)
+	contentTracker = handler.NewContentTracker(5 * time.Hour)
 )
 
 func webhookHandler(w http.ResponseWriter, r *http.Request) {
