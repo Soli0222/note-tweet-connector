@@ -30,6 +30,10 @@ func Tweet2NoteHandler(data []byte, tracker *ContentTracker) error {
 
 	tweetText := payload.Body.Tweet.Text
 
+	if rtAtPattern.MatchString(tweetText) {
+		tweetText = tweetText + "\n\n" + payload.Body.Tweet.Url
+	}
+
 	// "RN [at]" で始まるツイートをスキップ
 	if rnAtPattern.MatchString(tweetText) {
 		slog.Info("Skipping RN [at] tweet", slog.String("text", tweetText[:20]))

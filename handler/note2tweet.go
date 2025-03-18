@@ -34,6 +34,7 @@ type payloadNoteData struct {
 			Text       string        `json:"text"`
 			Renote     struct {
 				ID   string `json:"id"`
+				URI  string `json:"uri"`
 				Text string `json:"text"`
 				User struct {
 					Host     string `json:"host"`
@@ -53,11 +54,13 @@ func Note2TweetHandler(data []byte, tracker *ContentTracker) error {
 
 	noteText := payload.Body.Note.Text
 	if noteText == "" || noteText == "null" {
-		renoteHost := payload.Body.Note.Renote.User.Host
-		if renoteHost == "" {
-			renoteHost = os.Getenv("MISSKEY_HOST")
+		if len(payload.Body.Note.Files) == 0 {
+			renoteHost := payload.Body.Note.Renote.User.Host
+			if renoteHost == "" {
+				renoteHost = os.Getenv("MISSKEY_HOST")
+			}
+			noteText = "RN [at]" + payload.Body.Note.Renote.User.Username + "[at]" + renoteHost + "\n\n" + payload.Body.Note.Renote.Text + "\n\n" + payload.Body.Note.Renote.URI
 		}
-		noteText = "RN [at]" + payload.Body.Note.Renote.User.Username + "[at]" + renoteHost + "\n\n" + payload.Body.Note.Renote.Text
 	}
 
 	// "RT @" で始まるノートをスキップ
