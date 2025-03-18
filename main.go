@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -82,11 +83,28 @@ func healthzHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("Webhook Test Server is healthy\nVersion: " + version))
 }
 
+func printBanner() {
+	banner := `
+               _                  _                          _                                                   _
+              | |                | |                        | |                                                 | |
+ _ __    ___  | |_   ___  ______ | |_ __      __  ___   ___ | |_  ______   ___   ___   _ __   _ __    ___   ___ | |_   ___   _ __
+| '_ \  / _ \ | __| / _ \|______|| __|\ \ /\ / / / _ \ / _ \| __||______| / __| / _ \ | '_ \ | '_ \  / _ \ / __|| __| / _ \ | '__|
+| | | || (_) || |_ |  __/        | |_  \ V  V / |  __/|  __/| |_         | (__ | (_) || | | || | | ||  __/| (__ | |_ | (_) || |
+|_| |_| \___/  \__| \___|         \__|  \_/\_/   \___| \___| \__|         \___| \___/ |_| |_||_| |_| \___| \___| \__| \___/ |_|
+
+                                                                                                    
+Version: ` + version
+
+	fmt.Println(banner)
+}
+
 func main() {
 	err := godotenv.Load()
 	if err != nil {
 		slog.Warn(".env file not found, using environment variables")
 	}
+
+	printBanner()
 
 	http.HandleFunc("/", webhookHandler)
 	http.HandleFunc("/healthz", healthzHandler)
