@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   webhook-server:
-    image: soli0222/note-tweet-connector:1.6.2
+    image: soli0222/note-tweet-connector:1.7.0
     ports:
       - "8080:8080"
     volumes:
