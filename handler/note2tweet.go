@@ -31,6 +31,7 @@ type payloadNoteData struct {
 			Visibility string        `json:"visibility"`
 			LocalOnly  bool          `json:"localOnly"`
 			Files      []interface{} `json:"files"`
+			Cw         string        `json:"cw"`
 			Text       string        `json:"text"`
 			Renote     struct {
 				ID   string `json:"id"`
@@ -53,6 +54,13 @@ func Note2TweetHandler(data []byte, tracker *ContentTracker) error {
 	}
 
 	noteText := payload.Body.Note.Text
+	noteURI := payload.Server + "/notes/" + payload.Body.Note.ID
+
+	if payload.Body.Note.Cw != "" {
+		circles := strings.Repeat("○", len(payload.Body.Note.Text))
+		noteText = payload.Body.Note.Cw + "\n" + circles + "\n" + noteURI
+	}
+
 	if noteText == "" || noteText == "null" {
 		if len(payload.Body.Note.Files) == 0 {
 			renoteHost := payload.Body.Note.Renote.User.Host
