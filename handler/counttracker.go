@@ -77,7 +77,13 @@ func (c *ContentTracker) computeHash(content string) string {
 
 	hasher := sha256.New()
 	hasher.Write([]byte(normalized))
-	return hex.EncodeToString(hasher.Sum(nil))
+	hash := hex.EncodeToString(hasher.Sum(nil))
+
+	slog.Debug("Content hash computed",
+		slog.String("hash", hash),
+		slog.String("normalized_content", normalized))
+
+	return hash
 }
 
 // IsProcessed checks if content has been recently processed
@@ -85,7 +91,11 @@ func (c *ContentTracker) IsProcessed(content string) bool {
 	hash := c.computeHash(content)
 
 	if _, exists := c.processedHashes.Load(hash); exists {
-		slog.Info("Content already processed", slog.String("hash", hash))
+		// Escape newlines for better log visibility
+		escapedContent := strings.ReplaceAll(content, "\n", "\\n")
+		slog.Info("Content already processed",
+			slog.String("hash", hash),
+			slog.String("content_preview", escapedContent[:min(50, len(escapedContent))]))
 		return true
 	}
 	return false
@@ -95,5 +105,18 @@ func (c *ContentTracker) IsProcessed(content string) bool {
 func (c *ContentTracker) MarkProcessed(content string) {
 	hash := c.computeHash(content)
 	c.processedHashes.Store(hash, time.Now())
-	slog.Debug("Content marked as processed", slog.String("hash", hash))
+
+	// Escape newlines for better log visibility
+	escapedContent := strings.ReplaceAll(content, "\n", "\\n")
+	slog.Debug("Content marked as processed",
+		slog.String("hash", hash),
+		slog.String("content_preview", escapedContent[:min(50, len(escapedContent))]))
+}
+
+// Helper function to get minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
