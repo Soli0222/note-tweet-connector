@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	version = "1.7.0"
+	version = "1.7.1"
 	contentTracker = handler.NewContentTracker(5 * time.Hour)
 )
 
