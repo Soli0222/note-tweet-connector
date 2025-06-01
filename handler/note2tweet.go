@@ -73,18 +73,24 @@ func Note2TweetHandler(data []byte, tracker *ContentTracker) error {
 
 	// "RT @" で始まるノートをスキップ
 	if rtAtPattern.MatchString(noteText) {
-		slog.Info("Skipping RT @ note", slog.String("text", noteText[:20]))
+		escapedText := strings.ReplaceAll(noteText, "\n", "\\n")
+		slog.Info("Skipping RT @ note",
+			slog.String("note_id", payload.Body.Note.ID),
+			slog.String("text_preview", escapedText[:min(50, len(escapedText))]))
 		return nil
 	}
 
 	// Check if this content has already been processed
 	if tracker.IsProcessed(noteText) {
-		slog.Info("Note already processed, skipping")
+		slog.Info("Note already processed, skipping",
+			slog.String("note_id", payload.Body.Note.ID))
 		return nil
 	}
 
 	if payload.Body.Note.Visibility != "public" {
-		slog.Info("Note is not public, skipping")
+		slog.Info("Note is not public, skipping",
+			slog.String("note_id", payload.Body.Note.ID),
+			slog.String("visibility", payload.Body.Note.Visibility))
 		return nil
 	}
 
@@ -110,8 +116,16 @@ func Note2TweetHandler(data []byte, tracker *ContentTracker) error {
 	if err == nil {
 		// Mark as processed only if posting was successful
 		tracker.MarkProcessed(noteText)
+		escapedText := strings.ReplaceAll(noteText, "\n", "\\n")
+		slog.Info("Successfully posted note to tweet",
+			slog.String("note_id", payload.Body.Note.ID),
+			slog.String("text_preview", escapedText[:min(100, len(escapedText))]),
+			slog.Bool("has_media", len(fileURLs) > 0),
+			slog.Int("media_count", len(fileURLs)))
 	} else {
-		slog.Error("Failed to post note to tweet", slog.Any("error", err))
+		slog.Error("Failed to post note to tweet",
+			slog.String("note_id", payload.Body.Note.ID),
+			slog.Any("error", err))
 		return err
 	}
 
@@ -175,7 +189,10 @@ func Post(text string) error {
 		return fmt.Errorf("IFTTT POST request failed with status %d", resp.StatusCode)
 	}
 
-	slog.Info("Success: Note posted to Tweet via IFTTT")
+	escapedText := strings.ReplaceAll(text, "\n", "\\n")
+	slog.Info("Successfully posted note to tweet via IFTTT",
+		slog.String("text_preview", escapedText[:min(100, len(escapedText))]),
+		slog.String("endpoint", IFTTT_EVENT))
 
 	return nil
 }
@@ -237,7 +254,10 @@ func PostWithMedia(text string, fileURLs []string) error {
 		return err
 	}
 
-	slog.Info("Success: Note posted to Tweet with media")
+	escapedText := strings.ReplaceAll(text, "\n", "\\n")
+	slog.Info("Successfully posted note to tweet with media",
+		slog.String("text_preview", escapedText[:min(100, len(escapedText))]),
+		slog.Int("media_count", len(mediaIDs)))
 
 	return nil
 }

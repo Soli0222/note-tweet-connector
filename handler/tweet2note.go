@@ -3,10 +3,12 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 )
 
 type payloadTweetData struct {
@@ -36,7 +38,9 @@ func Tweet2NoteHandler(data []byte, tracker *ContentTracker) error {
 
 	// "RN [at]" で始まるツイートをスキップ
 	if rnAtPattern.MatchString(tweetText) {
-		slog.Info("Skipping RN [at] tweet", slog.String("text", tweetText[:20]))
+		escapedText := strings.ReplaceAll(tweetText, "\n", "\\n")
+		slog.Info("Skipping RN [at] tweet",
+			slog.String("text_preview", escapedText[:min(50, len(escapedText))]))
 		return nil
 	}
 
@@ -63,12 +67,14 @@ func Tweet2NoteHandler(data []byte, tracker *ContentTracker) error {
 	if err == nil {
 		// Mark as processed only if posting was successful
 		tracker.MarkProcessed(tweetText)
+		escapedText := strings.ReplaceAll(tweetText, "\n", "\\n")
+		slog.Info("Successfully forwarded tweet to note",
+			slog.String("text_preview", escapedText[:min(100, len(escapedText))]),
+			slog.String("tweet_url", payload.Body.Tweet.Url))
 	} else {
 		slog.Error("Failed to post tweet to note", slog.Any("error", err))
 		return err
 	}
-
-	slog.Info("Successfully forwarded tweet to note")
 
 	return nil
 }
@@ -114,9 +120,16 @@ func Note(host, token, text string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		slog.Error("Failed to send request", slog.Any("status", resp.Status))
-		return err
+		slog.Error("Failed to send request",
+			slog.Int("status_code", resp.StatusCode),
+			slog.String("status", resp.Status),
+			slog.String("endpoint", endpoint))
+		return fmt.Errorf("HTTP request failed with status %d", resp.StatusCode)
 	}
+
+	slog.Debug("Successfully posted note to Misskey",
+		slog.String("endpoint", endpoint),
+		slog.Int("status_code", resp.StatusCode))
 
 	return nil
 }
