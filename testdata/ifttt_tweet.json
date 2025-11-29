@@ -1,0 +1,8 @@
+{
+  "body": {
+    "tweet": {
+      "text": "This is a dummy tweet for testing purposes.\n#Testing #DummyData\nhttps://t.co/dummylink123",
+      "url": "https://twitter.com/dummy_user/status/1234567890123456789"
+    }
+  }
+}
