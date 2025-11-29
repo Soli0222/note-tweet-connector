@@ -1,6 +1,7 @@
-package handler
+package tracker
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
@@ -28,51 +29,54 @@ var (
 )
 
 // NewContentTracker creates a new content tracker with entries expiring after the specified duration
-func NewContentTracker(expiryDuration time.Duration) *ContentTracker {
+func NewContentTracker(ctx context.Context, expiryDuration time.Duration) *ContentTracker {
 	tracker := &ContentTracker{
 		expiryDuration: expiryDuration,
 	}
 
 	// Start cleanup process for expired entries
-	go tracker.periodicCleanup()
+	go tracker.periodicCleanup(ctx)
 
 	return tracker
 }
 
 // periodicCleanup removes expired entries every minute
-func (c *ContentTracker) periodicCleanup() {
+func (c *ContentTracker) periodicCleanup(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		now := time.Now()
-		c.processedHashes.Range(func(key, value interface{}) bool {
-			timestamp, ok := value.(time.Time)
-			if !ok || now.Sub(timestamp) > c.expiryDuration {
-				c.processedHashes.Delete(key)
-				slog.Debug("Removed expired content hash", slog.String("hash", key.(string)))
-			}
-			return true
-		})
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("Stopping content tracker cleanup")
+			return
+		case <-ticker.C:
+			now := time.Now()
+			c.processedHashes.Range(func(key, value interface{}) bool {
+				timestamp, ok := value.(time.Time)
+				if !ok || now.Sub(timestamp) > c.expiryDuration {
+					c.processedHashes.Delete(key)
+					slog.Debug("Removed expired content hash", slog.String("hash", key.(string)))
+				}
+				return true
+			})
+		}
 	}
 }
 
 // computeHash generates a stable hash for the content
 func (c *ContentTracker) computeHash(content string) string {
-	// 小文字化、改行の削除、空白のトリミングによる正規化
 	normalized := strings.ToLower(content)
 	normalized = strings.ReplaceAll(normalized, "\n", " ")
 	normalized = strings.TrimSpace(normalized)
 
-	// URLを削除（すべてのURLを一括で処理）
 	normalized = urlPattern.ReplaceAllString(normalized, "")
 
-	// 連続する空白を1つに置換
 	normalized = strings.Join(strings.Fields(normalized), " ")
 
-	// プラットフォーム間で統一するために先頭部分のみを使用
-	if len(normalized) > maxContentLength {
-		normalized = normalized[:maxContentLength]
+	runes := []rune(normalized)
+	if len(runes) > maxContentLength {
+		normalized = string(runes[:maxContentLength])
 	}
 
 	hasher := sha256.New()
@@ -91,11 +95,10 @@ func (c *ContentTracker) IsProcessed(content string) bool {
 	hash := c.computeHash(content)
 
 	if _, exists := c.processedHashes.Load(hash); exists {
-		// Escape newlines for better log visibility
 		escapedContent := strings.ReplaceAll(content, "\n", "\\n")
 		slog.Info("Content already processed",
 			slog.String("hash", hash),
-			slog.String("content_preview", escapedContent[:min(50, len(escapedContent))]))
+			slog.String("content_preview", truncateString(escapedContent, 50)))
 		return true
 	}
 	return false
@@ -106,17 +109,38 @@ func (c *ContentTracker) MarkProcessed(content string) {
 	hash := c.computeHash(content)
 	c.processedHashes.Store(hash, time.Now())
 
-	// Escape newlines for better log visibility
 	escapedContent := strings.ReplaceAll(content, "\n", "\\n")
 	slog.Debug("Content marked as processed",
 		slog.String("hash", hash),
-		slog.String("content_preview", escapedContent[:min(50, len(escapedContent))]))
+		slog.String("content_preview", truncateString(escapedContent, 50)))
 }
 
-// Helper function to get minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
+// MarkProcessedIfNotExists atomically checks and marks content as processed.
+// Returns true if the content was newly marked, false if it was already processed.
+func (c *ContentTracker) MarkProcessedIfNotExists(content string) bool {
+	hash := c.computeHash(content)
+
+	_, loaded := c.processedHashes.LoadOrStore(hash, time.Now())
+	if loaded {
+		escapedContent := strings.ReplaceAll(content, "\n", "\\n")
+		slog.Info("Content already processed (atomic check)",
+			slog.String("hash", hash),
+			slog.String("content_preview", truncateString(escapedContent, 50)))
+		return false
 	}
-	return b
+
+	escapedContent := strings.ReplaceAll(content, "\n", "\\n")
+	slog.Debug("Content marked as processed (atomic)",
+		slog.String("hash", hash),
+		slog.String("content_preview", truncateString(escapedContent, 50)))
+	return true
+}
+
+// truncateString truncates a string to the specified length
+func truncateString(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) > maxLen {
+		return string(runes[:maxLen])
+	}
+	return s
 }
