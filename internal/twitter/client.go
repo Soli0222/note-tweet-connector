@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -28,6 +29,33 @@ var httpClient = &http.Client{
 
 type UploadMediaResponse struct {
 	MediaIDString string `json:"media_id_string"`
+}
+
+// validateMediaURL validates that the media URL is from an allowed host
+func validateMediaURL(fileURL string) error {
+	parsed, err := url.Parse(fileURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	// Only allow HTTPS
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("only HTTPS URLs are allowed")
+	}
+
+	// Check against allowed media host
+	host := strings.ToLower(parsed.Host)
+	mediaHost := os.Getenv("MISSKEY_MEDIA_HOST")
+
+	if mediaHost == "" {
+		return fmt.Errorf("MISSKEY_MEDIA_HOST is not configured")
+	}
+
+	if host == strings.ToLower(mediaHost) {
+		return nil
+	}
+
+	return fmt.Errorf("URL host %q is not allowed (expected %q)", host, mediaHost)
 }
 
 func loadTwitterEnv() (string, string, string, string, error) {
@@ -162,6 +190,12 @@ func PostWithMedia(ctx context.Context, text string, fileURLs []string) error {
 }
 
 func uploadMediaFromURL(ctx context.Context, oauthClient *http.Client, fileURL string) (string, error) {
+	// Validate URL to prevent SSRF attacks
+	if err := validateMediaURL(fileURL); err != nil {
+		slog.Error("Invalid media URL", slog.String("url", fileURL), slog.Any("error", err))
+		return "", fmt.Errorf("invalid media URL: %w", err)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", fileURL, nil)
 	if err != nil {
 		return "", err
