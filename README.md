@@ -49,6 +49,7 @@ cp .env.example .env
 | `IFTTT_HOOK_SECRET` | IFTTTからのwebhookを認証するための秘密キー |
 | `MISSKEY_HOST` | Misskeyインスタンスのホスト名（例: example.tld） |
 | `MISSKEY_TOKEN` | MisskeyのAPIトークン |
+| `MISSKEY_MEDIA_HOST` | Misskeyのメディアストレージホスト（例: s3.example.tld）※SSRF対策用 |
 | `API_KEY` | Twitter APIキー |
 | `API_KEY_SECRET` | Twitter APIキーシークレット |
 | `ACCESS_TOKEN` | Twitterアクセストークン |
