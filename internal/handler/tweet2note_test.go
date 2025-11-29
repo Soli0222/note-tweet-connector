@@ -136,16 +136,15 @@ func TestTweet2NoteHandler_DuplicateDetection(t *testing.T) {
 	t.Setenv("MISSKEY_HOST", "misskey.example")
 	t.Setenv("MISSKEY_TOKEN", "test-token")
 
-	payload1 := `{
-		"body": {
-			"tweet": {
-				"text": "Duplicate tweet content for testing",
-				"url": "https://twitter.com/user/status/111"
-			}
-		}
-	}`
+	// Test duplicate detection by checking the tracker directly
+	// We use the same content hash logic as the handler
+	testContent := "Duplicate tweet content for testing"
 
-	payload2 := `{
+	// Register content in tracker (simulating first tweet processed)
+	contentTracker.MarkProcessed(testContent)
+
+	// Second tweet with same content should be detected as duplicate
+	payload := `{
 		"body": {
 			"tweet": {
 				"text": "Duplicate tweet content for testing",
@@ -154,11 +153,8 @@ func TestTweet2NoteHandler_DuplicateDetection(t *testing.T) {
 		}
 	}`
 
-	// First call - will fail at Misskey posting but content tracked
-	_ = Tweet2NoteHandler(ctx, []byte(payload1), contentTracker, m)
-
-	// Second call should detect duplicate and skip
-	err := Tweet2NoteHandler(ctx, []byte(payload2), contentTracker, m)
+	// This should detect duplicate and skip (no API call)
+	err := Tweet2NoteHandler(ctx, []byte(payload), contentTracker, m)
 	if err != nil {
 		t.Errorf("Tweet2NoteHandler() should not return error for duplicate, got %v", err)
 	}

@@ -279,23 +279,15 @@ func TestNote2TweetHandler_DuplicateDetection(t *testing.T) {
 	contentTracker := tracker.NewContentTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
-	// First note
-	payload1 := `{
-		"body": {
-			"note": {
-				"id": "note-1",
-				"text": "Duplicate test content",
-				"visibility": "public",
-				"localOnly": false,
-				"files": [],
-				"cw": null
-			}
-		},
-		"server": "https://misskey.example"
-	}`
+	// Test duplicate detection by checking the tracker directly
+	// We use the same content hash logic as the handler
+	testContent := "Duplicate test content"
 
-	// Second note with same content but different ID
-	payload2 := `{
+	// Register content in tracker (simulating first note processed)
+	contentTracker.MarkProcessed(testContent)
+
+	// Second note with same content should be detected as duplicate
+	payload := `{
 		"body": {
 			"note": {
 				"id": "note-2",
@@ -309,12 +301,8 @@ func TestNote2TweetHandler_DuplicateDetection(t *testing.T) {
 		"server": "https://misskey.example"
 	}`
 
-	// Process first note - this will fail at Twitter posting but content should be tracked
-	_ = Note2TweetHandler(ctx, []byte(payload1), contentTracker, m)
-
-	// The content should now be marked as processed
-	// Second call should detect duplicate
-	err := Note2TweetHandler(ctx, []byte(payload2), contentTracker, m)
+	// This should detect duplicate and skip (no API call)
+	err := Note2TweetHandler(ctx, []byte(payload), contentTracker, m)
 	if err != nil {
 		t.Errorf("Note2TweetHandler() should not return error for duplicate, got %v", err)
 	}

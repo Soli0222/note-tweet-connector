@@ -35,8 +35,8 @@ func TestWithTestData_MisskeyNote(t *testing.T) {
 	if payload.Body.Note.Text != "This is a dummy note for testing purposes." {
 		t.Errorf("unexpected text: %s", payload.Body.Note.Text)
 	}
-	if payload.Body.Note.Visibility != "public" {
-		t.Errorf("expected visibility 'public', got '%s'", payload.Body.Note.Visibility)
+	if payload.Body.Note.Visibility != "followers" {
+		t.Errorf("expected visibility 'followers', got '%s'", payload.Body.Note.Visibility)
 	}
 	if payload.Server != "http://localhost:3000" {
 		t.Errorf("expected server 'http://localhost:3000', got '%s'", payload.Server)
@@ -57,7 +57,8 @@ func TestWithTestData_IFTTTTweet(t *testing.T) {
 	}
 
 	// Verify parsed values
-	expectedText := "This is a dummy tweet for testing purposes.\n#Testing #DummyData\nhttps://t.co/dummylink123"
+	// Note: text starts with "RN [at]" to trigger skip condition in handler tests
+	expectedText := "RN [at]dummy_user This is a dummy tweet for testing purposes.\n#Testing #DummyData\nhttps://t.co/dummylink123"
 	if payload.Body.Tweet.Text != expectedText {
 		t.Errorf("unexpected text: %s", payload.Body.Tweet.Text)
 	}
@@ -78,13 +79,10 @@ func TestWithTestData_Note2TweetHandler(t *testing.T) {
 	contentTracker := tracker.NewContentTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
-	// This will fail at Twitter posting (no credentials) but should parse correctly
+	// Test data has visibility=followers, so it should be skipped without API call
 	err = Note2TweetHandler(ctx, data, contentTracker, m)
-	// We expect an error because IFTTT credentials are not set
-	if err == nil {
-		// If no error, check that it was skipped for a valid reason
-		// (e.g., localOnly=true in test data)
-		t.Log("Note was skipped or processed without error")
+	if err != nil {
+		t.Errorf("Note2TweetHandler() should not return error for non-public note, got %v", err)
 	}
 }
 
@@ -104,11 +102,10 @@ func TestWithTestData_Tweet2NoteHandler(t *testing.T) {
 	t.Setenv("MISSKEY_HOST", "misskey.example")
 	t.Setenv("MISSKEY_TOKEN", "test-token")
 
-	// This will fail at Misskey posting (no real server) but should parse correctly
+	// Test data has "RN [at]" pattern, so it should be skipped without API call
 	err = Tweet2NoteHandler(ctx, data, contentTracker, m)
-	// We expect an error because Misskey server is not reachable
-	if err == nil {
-		t.Log("Tweet was skipped or processed without error")
+	if err != nil {
+		t.Errorf("Tweet2NoteHandler() should not return error for RN pattern, got %v", err)
 	}
 }
 

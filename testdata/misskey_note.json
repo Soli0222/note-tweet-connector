@@ -47,7 +47,7 @@
         "username": "dummy1"
       },
       "userId": "dummy-user-1",
-      "visibility": "public",
+      "visibility": "followers",
       "visibleUserIds": []
     }
   },
