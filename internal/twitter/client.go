@@ -176,7 +176,7 @@ func PostWithMedia(ctx context.Context, text string, fileURLs []string) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		slog.Error("Non-OK response from Twitter", slog.Int("status", resp.StatusCode))
 		return fmt.Errorf("twitter POST request failed with status %d", resp.StatusCode)
 	}
