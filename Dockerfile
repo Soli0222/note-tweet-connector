@@ -20,4 +20,5 @@ COPY --from=builder /app/note-tweet-connector .
 
 EXPOSE 8080 9090
 
-CMD ["./note-tweet-connector"]
+ENTRYPOINT ["./note-tweet-connector"]
+CMD []
