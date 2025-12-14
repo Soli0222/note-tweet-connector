@@ -20,4 +20,28 @@
       'security',
     ],
   },
+  packageRules: [
+    {
+      matchManagers: [
+        'github-actions',
+      ],
+      commitMessageTopic: 'GitHub Action {{depName}}',
+      automerge: true,
+    },
+    {
+      matchManagers: [
+        'gomod',
+      ],
+      commitMessageTopic: 'Go {{depName}}',
+      automerge: false,
+    },
+    {
+      matchManagers: [
+        'docker-compose',
+        'dockerfile',
+      ],
+      commitMessageTopic: 'Docker {{depName}}',
+      automerge: false,
+    },
+  ],
 }
