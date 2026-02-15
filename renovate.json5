@@ -1,14 +1,15 @@
 {
-  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended",
-    ":dependencyDashboard"
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: [
+    'config:recommended',
+    ':dependencyDashboard',
   ],
   timezone: 'Asia/Tokyo',
+  rangeStrategy: 'bump',
   prConcurrentLimit: 20,
   prHourlyLimit: 10,
-  "reviewers": [
-    "Soli0222"
+  reviewers: [
+    'Soli0222',
   ],
   semanticCommits: 'enabled',
   prCreation: 'immediate',
@@ -20,6 +21,15 @@
       'security',
     ],
   },
+  customManagers: [
+    {
+      customType: 'regex',
+      fileMatch: ['go\\.mod$'],
+      matchStrings: ['go (?<currentValue>\\d+\\.\\d+\\.\\d+)\\n'],
+      depNameTemplate: 'golang',
+      datasourceTemplate: 'golang-version',
+    },
+  ],
   packageRules: [
     {
       matchManagers: [
@@ -33,15 +43,16 @@
         'gomod',
       ],
       commitMessageTopic: 'Go {{depName}}',
-      automerge: false,
+      automerge: true,
     },
     {
       matchManagers: [
         'docker-compose',
         'dockerfile',
       ],
+      matchDepNames: ['!golang'],
       commitMessageTopic: 'Docker {{depName}}',
-      automerge: false,
+      automerge: true,
     },
   ],
 }
