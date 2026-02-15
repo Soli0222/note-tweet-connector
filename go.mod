@@ -1,6 +1,6 @@
 module github.com/Soli0222/note-tweet-connector
 
-go 1.25.4
+go 1.26.0
 
 require (
 	github.com/dghubble/oauth1 v0.7.3
