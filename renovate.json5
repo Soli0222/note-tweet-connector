@@ -5,6 +5,7 @@
     ':dependencyDashboard',
   ],
   timezone: 'Asia/Tokyo',
+  minimumReleaseAge: '7 days',
   rangeStrategy: 'bump',
   prConcurrentLimit: 20,
   prHourlyLimit: 10,
