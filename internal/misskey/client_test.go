@@ -31,9 +31,12 @@ func TestCreateNoteWithFilesUsesBearerAuth(t *testing.T) {
 	defer func() { httpClient = oldClient }()
 
 	host := strings.TrimPrefix(server.URL, "https://")
-	err := CreateNoteWithFiles(context.Background(), host, "test-token", "hello", []string{"file-1"})
+	noteID, err := CreateNoteWithFiles(context.Background(), host, "test-token", "hello", []string{"file-1"})
 	if err != nil {
 		t.Fatalf("CreateNoteWithFiles() error = %v", err)
+	}
+	if noteID != "note-1" {
+		t.Fatalf("noteID = %q, want note-1", noteID)
 	}
 
 	if gotAuth != "Bearer test-token" {

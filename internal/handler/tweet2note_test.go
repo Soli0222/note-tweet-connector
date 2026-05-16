@@ -274,7 +274,7 @@ func TestParseAccountActivityPayload(t *testing.T) {
 
 func TestHandleIncomingTweet_WithMedia(t *testing.T) {
 	ctx := context.Background()
-	contentTracker := tracker.NewContentTracker(ctx, 1*time.Hour)
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
 	t.Setenv("MISSKEY_HOST", "misskey.example")
@@ -298,13 +298,13 @@ func TestHandleIncomingTweet_WithMedia(t *testing.T) {
 
 	var gotText string
 	var gotFileIDs []string
-	createMisskeyNoteWithFiles = func(ctx context.Context, host, token, text string, fileIDs []string) error {
+	createMisskeyNoteWithFiles = func(ctx context.Context, host, token, text string, fileIDs []string) (string, error) {
 		if host != "misskey.example" || token != "test-token" {
 			t.Fatalf("unexpected create auth host=%q token=%q", host, token)
 		}
 		gotText = text
 		gotFileIDs = append([]string(nil), fileIDs...)
-		return nil
+		return "note-123", nil
 	}
 
 	tweet := IncomingTweet{
@@ -315,7 +315,7 @@ func TestHandleIncomingTweet_WithMedia(t *testing.T) {
 		MediaURLs: []string{"https://pbs.twimg.com/media/1.png", "https://pbs.twimg.com/media/2.png"},
 	}
 
-	if err := HandleIncomingTweet(ctx, tweet, contentTracker, m); err != nil {
+	if err := HandleIncomingTweet(ctx, tweet, crossPostTracker, m); err != nil {
 		t.Fatalf("HandleIncomingTweet() error = %v", err)
 	}
 	if !reflect.DeepEqual(uploadedURLs, tweet.MediaURLs) {
@@ -328,11 +328,17 @@ func TestHandleIncomingTweet_WithMedia(t *testing.T) {
 	if !reflect.DeepEqual(gotFileIDs, wantFileIDs) {
 		t.Fatalf("fileIDs = %#v, want %#v", gotFileIDs, wantFileIDs)
 	}
+	if !crossPostTracker.HasTweet("123") {
+		t.Fatal("tweet ID was not recorded")
+	}
+	if !crossPostTracker.HasMisskeyNote("note-123") {
+		t.Fatal("note ID was not recorded")
+	}
 }
 
 func TestTweet2NoteHandler_SkipConditions(t *testing.T) {
 	ctx := context.Background()
-	contentTracker := tracker.NewContentTracker(ctx, 1*time.Hour)
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
 	t.Setenv("MISSKEY_HOST", "misskey.example")
@@ -352,22 +358,21 @@ func TestTweet2NoteHandler_SkipConditions(t *testing.T) {
 		]
 	}`
 
-	err := Tweet2NoteHandler(ctx, []byte(payload), contentTracker, m)
+	err := Tweet2NoteHandler(ctx, []byte(payload), crossPostTracker, m)
 	if err != nil {
 		t.Errorf("Tweet2NoteHandler() should not return error for RN pattern, got %v", err)
 	}
 }
 
-func TestTweet2NoteHandler_DuplicateDetection(t *testing.T) {
+func TestTweet2NoteHandler_KnownCrossPostDetection(t *testing.T) {
 	ctx := context.Background()
-	contentTracker := tracker.NewContentTracker(ctx, 1*time.Hour)
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
 	t.Setenv("MISSKEY_HOST", "misskey.example")
 	t.Setenv("MISSKEY_TOKEN", "test-token")
 
-	testContent := "Duplicate tweet content for testing"
-	contentTracker.MarkProcessed(testContent)
+	crossPostTracker.RememberMisskeyToTweet("note-222", "222")
 
 	payload := `{
 		"for_user_id": "111",
@@ -383,21 +388,54 @@ func TestTweet2NoteHandler_DuplicateDetection(t *testing.T) {
 		]
 	}`
 
-	err := Tweet2NoteHandler(ctx, []byte(payload), contentTracker, m)
+	err := Tweet2NoteHandler(ctx, []byte(payload), crossPostTracker, m)
 	if err != nil {
-		t.Errorf("Tweet2NoteHandler() should not return error for duplicate, got %v", err)
+		t.Errorf("Tweet2NoteHandler() should not return error for known cross-post, got %v", err)
 	}
 }
 
-func TestTweet2NoteHandler_InvalidJSON(t *testing.T) {
+func TestTweet2NoteHandler_SkipsMissingTweetID(t *testing.T) {
 	ctx := context.Background()
-	contentTracker := tracker.NewContentTracker(ctx, 1*time.Hour)
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
 	t.Setenv("MISSKEY_HOST", "misskey.example")
 	t.Setenv("MISSKEY_TOKEN", "test-token")
 
-	err := Tweet2NoteHandler(ctx, []byte(`{invalid json}`), contentTracker, m)
+	oldCreate := createMisskeyNoteWithFiles
+	defer func() { createMisskeyNoteWithFiles = oldCreate }()
+	createMisskeyNoteWithFiles = func(ctx context.Context, host, token, text string, fileIDs []string) (string, error) {
+		t.Fatal("CreateNoteWithFiles should not be called when tweet ID is missing")
+		return "", nil
+	}
+
+	payload := `{
+		"for_user_id": "111",
+		"tweet_create_events": [
+			{
+				"text": "Tweet without ID",
+				"user": {
+					"id_str": "111",
+					"screen_name": "dummy_user"
+				}
+			}
+		]
+	}`
+
+	if err := Tweet2NoteHandler(ctx, []byte(payload), crossPostTracker, m); err != nil {
+		t.Fatalf("Tweet2NoteHandler() error = %v", err)
+	}
+}
+
+func TestTweet2NoteHandler_InvalidJSON(t *testing.T) {
+	ctx := context.Background()
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
+	m := metrics.NewNoop()
+
+	t.Setenv("MISSKEY_HOST", "misskey.example")
+	t.Setenv("MISSKEY_TOKEN", "test-token")
+
+	err := Tweet2NoteHandler(ctx, []byte(`{invalid json}`), crossPostTracker, m)
 	if err == nil {
 		t.Error("Tweet2NoteHandler() should return error for invalid JSON")
 	}

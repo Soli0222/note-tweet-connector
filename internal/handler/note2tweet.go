@@ -16,6 +16,9 @@ import (
 // RTと@記号の検出用正規表現
 var rtAtPattern = regexp.MustCompile(`^RT\s*@`)
 
+var postTweet = twitter.Post
+var postTweetWithMedia = twitter.PostWithMedia
+
 type payloadNoteData struct {
 	Server string `json:"server"`
 	Body   struct {
@@ -39,7 +42,7 @@ type payloadNoteData struct {
 	} `json:"body"`
 }
 
-func Note2TweetHandler(ctx context.Context, data []byte, contentTracker *tracker.ContentTracker, m *metrics.Metrics) error {
+func Note2TweetHandler(ctx context.Context, data []byte, crossPostTracker *tracker.CrossPostTracker, m *metrics.Metrics) error {
 	m.Note2TweetTotal.Inc()
 
 	payload, err := parseNotePayload(data)
@@ -49,9 +52,24 @@ func Note2TweetHandler(ctx context.Context, data []byte, contentTracker *tracker
 		return err
 	}
 
+	noteID := payload.Body.Note.ID
+	if noteID == "" {
+		slog.Warn("Note ID is missing, skipping")
+		m.Note2TweetSkipped.WithLabelValues("missing_id").Inc()
+		return nil
+	}
+
+	if crossPostTracker.HasMisskeyNote(noteID) {
+		slog.Info("Known cross-posted note, skipping",
+			slog.String("note_id", noteID))
+		m.Note2TweetSkipped.WithLabelValues("crosspost").Inc()
+		m.TrackerDuplicatesHit.Inc()
+		return nil
+	}
+
 	if payload.Body.Note.Visibility != "public" {
 		slog.Info("Note is not public, skipping",
-			slog.String("note_id", payload.Body.Note.ID),
+			slog.String("note_id", noteID),
 			slog.String("visibility", payload.Body.Note.Visibility))
 		m.Note2TweetSkipped.WithLabelValues("not_public").Inc()
 		return nil
@@ -59,7 +77,7 @@ func Note2TweetHandler(ctx context.Context, data []byte, contentTracker *tracker
 
 	if payload.Body.Note.LocalOnly {
 		slog.Info("Note is local only, skipping",
-			slog.String("note_id", payload.Body.Note.ID),
+			slog.String("note_id", noteID),
 			slog.Bool("local_only", payload.Body.Note.LocalOnly))
 		m.Note2TweetSkipped.WithLabelValues("local_only").Inc()
 		return nil
@@ -87,18 +105,9 @@ func Note2TweetHandler(ctx context.Context, data []byte, contentTracker *tracker
 	if rtAtPattern.MatchString(noteText) {
 		escapedText := strings.ReplaceAll(noteText, "\n", "\\n")
 		slog.Info("Skipping RT @ note",
-			slog.String("note_id", payload.Body.Note.ID),
+			slog.String("note_id", noteID),
 			slog.String("text_preview", escapedText[:min(50, len(escapedText))]))
 		m.Note2TweetSkipped.WithLabelValues("rt_pattern").Inc()
-		return nil
-	}
-
-	// Atomically check and mark as processed to prevent race conditions
-	if !contentTracker.MarkProcessedIfNotExists(noteText) {
-		slog.Info("Note already processed, skipping",
-			slog.String("note_id", payload.Body.Note.ID))
-		m.Note2TweetSkipped.WithLabelValues("duplicate").Inc()
-		m.TrackerDuplicatesHit.Inc()
 		return nil
 	}
 
@@ -115,23 +124,30 @@ func Note2TweetHandler(ctx context.Context, data []byte, contentTracker *tracker
 		}
 	}
 
+	var tweetID string
 	if len(fileURLs) == 0 {
-		err = twitter.Post(ctx, noteText)
+		tweetID, err = postTweet(ctx, noteText)
 	} else {
-		err = twitter.PostWithMedia(ctx, noteText, fileURLs)
+		tweetID, err = postTweetWithMedia(ctx, noteText, fileURLs)
 	}
 
 	if err == nil {
+		if tweetID == "" {
+			m.Note2TweetErrors.Inc()
+			return errMissingPostedID("tweet")
+		}
+		crossPostTracker.RememberMisskeyToTweet(noteID, tweetID)
 		escapedText := strings.ReplaceAll(noteText, "\n", "\\n")
 		slog.Info("Successfully posted note to tweet",
-			slog.String("note_id", payload.Body.Note.ID),
+			slog.String("note_id", noteID),
+			slog.String("tweet_id", tweetID),
 			slog.String("text_preview", escapedText[:min(100, len(escapedText))]),
 			slog.Bool("has_media", len(fileURLs) > 0),
 			slog.Int("media_count", len(fileURLs)))
 		m.Note2TweetSuccess.Inc()
 	} else {
 		slog.Error("Failed to post note to tweet",
-			slog.String("note_id", payload.Body.Note.ID),
+			slog.String("note_id", noteID),
 			slog.Any("error", err))
 		m.Note2TweetErrors.Inc()
 		return err

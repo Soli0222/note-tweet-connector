@@ -90,8 +90,8 @@ func setupLogger(level string) {
 }
 
 type server struct {
-	contentTracker *tracker.ContentTracker
-	metrics        *metrics.Metrics
+	crossPostTracker *tracker.CrossPostTracker
+	metrics          *metrics.Metrics
 }
 
 func (s *server) webhookHandler(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +122,7 @@ func (s *server) webhookHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		err = handler.Note2TweetHandler(r.Context(), body, s.contentTracker, s.metrics)
+		err = handler.Note2TweetHandler(r.Context(), body, s.crossPostTracker, s.metrics)
 		if err != nil {
 			http.Error(w, "Failed to handle request", http.StatusInternalServerError)
 			slog.Error("Failed to handle request", slog.Any("error", err))
@@ -195,7 +195,7 @@ func (s *server) twitterWebhookHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := handler.Tweet2NoteHandler(r.Context(), body, s.contentTracker, s.metrics); err != nil {
+		if err := handler.Tweet2NoteHandler(r.Context(), body, s.crossPostTracker, s.metrics); err != nil {
 			http.Error(w, "Failed to handle request", http.StatusInternalServerError)
 			slog.Error("Failed to handle request", slog.Any("error", err))
 			s.metrics.WebhookRequestsTotal.WithLabelValues("twitter", "error").Inc()
@@ -280,11 +280,11 @@ func main() {
 	// Initialize metrics
 	m := metrics.New(version)
 
-	contentTracker := tracker.NewContentTracker(ctx, cfg.TrackerExpiry)
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, cfg.TrackerExpiry)
 
 	s := &server{
-		contentTracker: contentTracker,
-		metrics:        m,
+		crossPostTracker: crossPostTracker,
+		metrics:          m,
 	}
 
 	// Main server

@@ -96,16 +96,16 @@ func loadTwitterUserAccessToken() (string, error) {
 }
 
 // Post posts a tweet via Twitter API.
-func Post(ctx context.Context, text string) error {
+func Post(ctx context.Context, text string) (string, error) {
 	return PostWithMedia(ctx, text, nil)
 }
 
 // PostWithMedia posts a tweet with media attachments via Twitter API
-func PostWithMedia(ctx context.Context, text string, fileURLs []string) error {
+func PostWithMedia(ctx context.Context, text string, fileURLs []string) (string, error) {
 	ak, aks, at, ats, err := loadTwitterEnv()
 	if err != nil {
 		slog.Error("Error loading Twitter API keys", slog.Any("error", err))
-		return err
+		return "", err
 	}
 
 	config := oauth1.NewConfig(ak, aks)
@@ -121,7 +121,7 @@ func PostWithMedia(ctx context.Context, text string, fileURLs []string) error {
 	for i := 0; i < limit; i++ {
 		mediaID, err := uploadMediaFromURL(ctx, fileURLs[i])
 		if err != nil {
-			return err
+			return "", err
 		}
 		mediaIDs = append(mediaIDs, mediaID)
 	}
@@ -129,7 +129,7 @@ func PostWithMedia(ctx context.Context, text string, fileURLs []string) error {
 	return postTweet(ctx, oauthClient, text, mediaIDs)
 }
 
-func postTweet(ctx context.Context, oauthClient *http.Client, text string, mediaIDs []string) error {
+func postTweet(ctx context.Context, oauthClient *http.Client, text string, mediaIDs []string) (string, error) {
 	tweetBodyMap := map[string]interface{}{"text": text}
 	if len(mediaIDs) > 0 {
 		tweetBodyMap["media"] = map[string]interface{}{
@@ -139,34 +139,52 @@ func postTweet(ctx context.Context, oauthClient *http.Client, text string, media
 	tweetBody, err := json.Marshal(tweetBodyMap)
 	if err != nil {
 		slog.Error("Error marshaling tweet data", slog.Any("error", err))
-		return err
+		return "", err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", ManageTweetEndpoint, bytes.NewBuffer(tweetBody))
 	if err != nil {
 		slog.Error("Error creating tweet request", slog.Any("error", err))
-		return err
+		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := oauthClient.Do(req)
 	if err != nil {
 		slog.Error("Error sending tweet request", slog.Any("error", err))
-		return err
+		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		slog.Error("Non-OK response from Twitter", slog.Int("status", resp.StatusCode))
-		return fmt.Errorf("twitter POST request failed with status %d", resp.StatusCode)
+		return "", fmt.Errorf("twitter POST request failed with status %d", resp.StatusCode)
+	}
+
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	var postResp struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBytes, &postResp); err != nil {
+		return "", fmt.Errorf("failed to parse twitter post response: %w", err)
+	}
+	if postResp.Data.ID == "" {
+		return "", fmt.Errorf("twitter post response did not include tweet id")
 	}
 
 	escapedText := strings.ReplaceAll(text, "\n", "\\n")
 	slog.Info("Successfully posted note to tweet",
+		slog.String("tweet_id", postResp.Data.ID),
 		slog.String("text_preview", escapedText[:min(100, len(escapedText))]),
 		slog.Int("media_count", len(mediaIDs)))
 
-	return nil
+	return postResp.Data.ID, nil
 }
 
 func uploadMediaFromURL(ctx context.Context, fileURL string) (string, error) {

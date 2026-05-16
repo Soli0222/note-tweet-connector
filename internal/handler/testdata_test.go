@@ -79,11 +79,11 @@ func TestWithTestData_Note2TweetHandler(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	contentTracker := tracker.NewContentTracker(ctx, 1*time.Hour)
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
 	// Test data has visibility=followers, so it should be skipped without API call
-	err = Note2TweetHandler(ctx, data, contentTracker, m)
+	err = Note2TweetHandler(ctx, data, crossPostTracker, m)
 	if err != nil {
 		t.Errorf("Note2TweetHandler() should not return error for non-public note, got %v", err)
 	}
@@ -98,7 +98,7 @@ func TestWithTestData_Tweet2NoteHandler(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	contentTracker := tracker.NewContentTracker(ctx, 1*time.Hour)
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
 	// Set required environment variables
@@ -106,7 +106,7 @@ func TestWithTestData_Tweet2NoteHandler(t *testing.T) {
 	t.Setenv("MISSKEY_TOKEN", "test-token")
 
 	// Test data has "RN [at]" pattern, so it should be skipped without API call
-	err = Tweet2NoteHandler(ctx, data, contentTracker, m)
+	err = Tweet2NoteHandler(ctx, data, crossPostTracker, m)
 	if err != nil {
 		t.Errorf("Tweet2NoteHandler() should not return error for RN pattern, got %v", err)
 	}

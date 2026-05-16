@@ -203,7 +203,7 @@ func TestParseNotePayload(t *testing.T) {
 
 func TestNote2TweetHandler_SkipConditions(t *testing.T) {
 	ctx := context.Background()
-	contentTracker := tracker.NewContentTracker(ctx, 1*time.Hour)
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
 	tests := []struct {
@@ -283,7 +283,7 @@ func TestNote2TweetHandler_SkipConditions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := Note2TweetHandler(ctx, []byte(tt.payload), contentTracker, m)
+			err := Note2TweetHandler(ctx, []byte(tt.payload), crossPostTracker, m)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Note2TweetHandler() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -291,24 +291,18 @@ func TestNote2TweetHandler_SkipConditions(t *testing.T) {
 	}
 }
 
-func TestNote2TweetHandler_DuplicateDetection(t *testing.T) {
+func TestNote2TweetHandler_KnownCrossPostDetection(t *testing.T) {
 	ctx := context.Background()
-	contentTracker := tracker.NewContentTracker(ctx, 1*time.Hour)
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
-	// Test duplicate detection by checking the tracker directly
-	// We use the same content hash logic as the handler
-	testContent := "Duplicate test content"
+	crossPostTracker.RememberTweetToMisskey("tweet-2", "note-2")
 
-	// Register content in tracker (simulating first note processed)
-	contentTracker.MarkProcessed(testContent)
-
-	// Second note with same content should be detected as duplicate
 	payload := `{
 		"body": {
 			"note": {
 				"id": "note-2",
-				"text": "Duplicate test content",
+				"text": "Text can differ and should still be skipped by ID",
 				"visibility": "public",
 				"localOnly": false,
 				"files": [],
@@ -318,10 +312,89 @@ func TestNote2TweetHandler_DuplicateDetection(t *testing.T) {
 		"server": "https://misskey.example"
 	}`
 
-	// This should detect duplicate and skip (no API call)
-	err := Note2TweetHandler(ctx, []byte(payload), contentTracker, m)
+	err := Note2TweetHandler(ctx, []byte(payload), crossPostTracker, m)
 	if err != nil {
-		t.Errorf("Note2TweetHandler() should not return error for duplicate, got %v", err)
+		t.Errorf("Note2TweetHandler() should not return error for known cross-post, got %v", err)
+	}
+}
+
+func TestNote2TweetHandler_RecordsCrossPostIDs(t *testing.T) {
+	ctx := context.Background()
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
+	m := metrics.NewNoop()
+
+	oldPost := postTweet
+	oldPostWithMedia := postTweetWithMedia
+	defer func() {
+		postTweet = oldPost
+		postTweetWithMedia = oldPostWithMedia
+	}()
+
+	var gotText string
+	postTweet = func(ctx context.Context, text string) (string, error) {
+		gotText = text
+		return "tweet-1", nil
+	}
+	postTweetWithMedia = func(ctx context.Context, text string, fileURLs []string) (string, error) {
+		t.Fatal("PostWithMedia should not be called")
+		return "", nil
+	}
+
+	payload := `{
+		"body": {
+			"note": {
+				"id": "note-1",
+				"text": "Public note",
+				"visibility": "public",
+				"localOnly": false,
+				"files": [],
+				"cw": null
+			}
+		},
+		"server": "https://misskey.example"
+	}`
+
+	if err := Note2TweetHandler(ctx, []byte(payload), crossPostTracker, m); err != nil {
+		t.Fatalf("Note2TweetHandler() error = %v", err)
+	}
+	if gotText != "Public note" {
+		t.Fatalf("posted text = %q, want Public note", gotText)
+	}
+	if !crossPostTracker.HasMisskeyNote("note-1") {
+		t.Fatal("note ID was not recorded")
+	}
+	if !crossPostTracker.HasTweet("tweet-1") {
+		t.Fatal("tweet ID was not recorded")
+	}
+}
+
+func TestNote2TweetHandler_SkipsMissingNoteID(t *testing.T) {
+	ctx := context.Background()
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
+	m := metrics.NewNoop()
+
+	oldPost := postTweet
+	defer func() { postTweet = oldPost }()
+	postTweet = func(ctx context.Context, text string) (string, error) {
+		t.Fatal("Post should not be called when note ID is missing")
+		return "", nil
+	}
+
+	payload := `{
+		"body": {
+			"note": {
+				"text": "Public note without ID",
+				"visibility": "public",
+				"localOnly": false,
+				"files": [],
+				"cw": null
+			}
+		},
+		"server": "https://misskey.example"
+	}`
+
+	if err := Note2TweetHandler(ctx, []byte(payload), crossPostTracker, m); err != nil {
+		t.Fatalf("Note2TweetHandler() error = %v", err)
 	}
 }
 
@@ -430,10 +503,10 @@ func TestRTAtPattern(t *testing.T) {
 
 func TestNote2TweetHandler_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
-	contentTracker := tracker.NewContentTracker(ctx, 1*time.Hour)
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
-	err := Note2TweetHandler(ctx, []byte(`{invalid json}`), contentTracker, m)
+	err := Note2TweetHandler(ctx, []byte(`{invalid json}`), crossPostTracker, m)
 	if err == nil {
 		t.Error("Note2TweetHandler() should return error for invalid JSON")
 	}
