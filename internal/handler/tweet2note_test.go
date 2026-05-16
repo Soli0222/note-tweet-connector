@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -69,6 +70,158 @@ func TestParseAccountActivityPayload(t *testing.T) {
 			},
 		},
 		{
+			name: "extended_tweet full_text takes precedence",
+			payload: `{
+				"for_user_id": "111",
+				"tweet_create_events": [
+					{
+						"id_str": "123456789",
+						"text": "truncated...",
+						"full_text": "legacy full text",
+						"extended_tweet": {
+							"full_text": "extended full text"
+						},
+						"user": {
+							"id_str": "111",
+							"screen_name": "dummy_user"
+						}
+					}
+				]
+			}`,
+			check: func(t *testing.T, tweets []IncomingTweet) {
+				if len(tweets) != 1 {
+					t.Fatalf("expected 1 tweet, got %d", len(tweets))
+				}
+				if tweets[0].Text != "extended full text" {
+					t.Errorf("expected extended_tweet.full_text, got %q", tweets[0].Text)
+				}
+			},
+		},
+		{
+			name: "extract photo media URLs",
+			payload: `{
+				"for_user_id": "111",
+				"tweet_create_events": [
+					{
+						"id_str": "123456789",
+						"text": "with media",
+						"extended_entities": {
+							"media": [
+								{
+									"type": "photo",
+									"media_url_https": "https://pbs.twimg.com/media/photo1.png"
+								},
+								{
+									"type": "video",
+									"media_url_https": "https://video.twimg.com/video.mp4"
+								}
+							]
+						},
+						"user": {
+							"id_str": "111",
+							"screen_name": "dummy_user"
+						}
+					}
+				]
+			}`,
+			check: func(t *testing.T, tweets []IncomingTweet) {
+				if len(tweets) != 1 {
+					t.Fatalf("expected 1 tweet, got %d", len(tweets))
+				}
+				want := []string{"https://pbs.twimg.com/media/photo1.png"}
+				if !reflect.DeepEqual(tweets[0].MediaURLs, want) {
+					t.Fatalf("MediaURLs = %#v, want %#v", tweets[0].MediaURLs, want)
+				}
+			},
+		},
+		{
+			name: "extended_tweet media takes precedence and deduplicates",
+			payload: `{
+				"for_user_id": "111",
+				"tweet_create_events": [
+					{
+						"id_str": "123456789",
+						"text": "with media",
+						"entities": {
+							"media": [
+								{
+									"type": "photo",
+									"media_url_https": "https://pbs.twimg.com/media/photo2.png"
+								}
+							]
+						},
+						"extended_tweet": {
+							"full_text": "with media full text",
+							"extended_entities": {
+								"media": [
+									{
+										"type": "photo",
+										"media_url_https": "https://pbs.twimg.com/media/photo1.png"
+									},
+									{
+										"type": "photo",
+										"media_url_https": "https://pbs.twimg.com/media/photo2.png"
+									}
+								]
+							}
+						},
+						"user": {
+							"id_str": "111",
+							"screen_name": "dummy_user"
+						}
+					}
+				]
+			}`,
+			check: func(t *testing.T, tweets []IncomingTweet) {
+				if len(tweets) != 1 {
+					t.Fatalf("expected 1 tweet, got %d", len(tweets))
+				}
+				want := []string{
+					"https://pbs.twimg.com/media/photo1.png",
+					"https://pbs.twimg.com/media/photo2.png",
+				}
+				if !reflect.DeepEqual(tweets[0].MediaURLs, want) {
+					t.Fatalf("MediaURLs = %#v, want %#v", tweets[0].MediaURLs, want)
+				}
+			},
+		},
+		{
+			name: "keeps media only tweet",
+			payload: `{
+				"for_user_id": "111",
+				"tweet_create_events": [
+					{
+						"id_str": "123456789",
+						"text": "",
+						"extended_entities": {
+							"media": [
+								{
+									"type": "photo",
+									"media_url_https": "https://pbs.twimg.com/media/photo1.png"
+								}
+							]
+						},
+						"user": {
+							"id_str": "111",
+							"screen_name": "dummy_user"
+						}
+					}
+				]
+			}`,
+			check: func(t *testing.T, tweets []IncomingTweet) {
+				if len(tweets) != 1 {
+					t.Fatalf("expected 1 tweet, got %d", len(tweets))
+				}
+				if tweets[0].Text != "" {
+					t.Fatalf("Text = %q, want empty", tweets[0].Text)
+				}
+				want := []string{"https://pbs.twimg.com/media/photo1.png"}
+				if !reflect.DeepEqual(tweets[0].MediaURLs, want) {
+					t.Fatalf("MediaURLs = %#v, want %#v", tweets[0].MediaURLs, want)
+				}
+			},
+		},
+		{
 			name: "mention from another user is ignored",
 			payload: `{
 				"for_user_id": "111",
@@ -116,6 +269,64 @@ func TestParseAccountActivityPayload(t *testing.T) {
 				tt.check(t, result)
 			}
 		})
+	}
+}
+
+func TestHandleIncomingTweet_WithMedia(t *testing.T) {
+	ctx := context.Background()
+	contentTracker := tracker.NewContentTracker(ctx, 1*time.Hour)
+	m := metrics.NewNoop()
+
+	t.Setenv("MISSKEY_HOST", "misskey.example")
+	t.Setenv("MISSKEY_TOKEN", "test-token")
+
+	oldCreate := createMisskeyNoteWithFiles
+	oldUpload := uploadMisskeyDriveFileFromURL
+	defer func() {
+		createMisskeyNoteWithFiles = oldCreate
+		uploadMisskeyDriveFileFromURL = oldUpload
+	}()
+
+	var uploadedURLs []string
+	uploadMisskeyDriveFileFromURL = func(ctx context.Context, host, token, fileURL string) (string, error) {
+		if host != "misskey.example" || token != "test-token" {
+			t.Fatalf("unexpected upload auth host=%q token=%q", host, token)
+		}
+		uploadedURLs = append(uploadedURLs, fileURL)
+		return "file-" + string(rune('0'+len(uploadedURLs))), nil
+	}
+
+	var gotText string
+	var gotFileIDs []string
+	createMisskeyNoteWithFiles = func(ctx context.Context, host, token, text string, fileIDs []string) error {
+		if host != "misskey.example" || token != "test-token" {
+			t.Fatalf("unexpected create auth host=%q token=%q", host, token)
+		}
+		gotText = text
+		gotFileIDs = append([]string(nil), fileIDs...)
+		return nil
+	}
+
+	tweet := IncomingTweet{
+		ID:        "123",
+		Text:      "tweet with media",
+		Username:  "dummy_user",
+		URL:       "https://twitter.com/dummy_user/status/123",
+		MediaURLs: []string{"https://pbs.twimg.com/media/1.png", "https://pbs.twimg.com/media/2.png"},
+	}
+
+	if err := HandleIncomingTweet(ctx, tweet, contentTracker, m); err != nil {
+		t.Fatalf("HandleIncomingTweet() error = %v", err)
+	}
+	if !reflect.DeepEqual(uploadedURLs, tweet.MediaURLs) {
+		t.Fatalf("uploadedURLs = %#v, want %#v", uploadedURLs, tweet.MediaURLs)
+	}
+	if gotText != "tweet with media" {
+		t.Fatalf("gotText = %q", gotText)
+	}
+	wantFileIDs := []string{"file-1", "file-2"}
+	if !reflect.DeepEqual(gotFileIDs, wantFileIDs) {
+		t.Fatalf("fileIDs = %#v, want %#v", gotFileIDs, wantFileIDs)
 	}
 }
 

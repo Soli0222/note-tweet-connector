@@ -47,8 +47,9 @@ cp .env.example .env
 |----------|------|
 | `MISSKEY_HOOK_SECRET` | Misskeyからのwebhookを認証するための秘密キー |
 | `MISSKEY_HOST` | Misskeyインスタンスのホスト名（例: example.tld） |
-| `MISSKEY_TOKEN` | MisskeyのAPIトークン |
+| `MISSKEY_TOKEN` | MisskeyのAPIトークン（`write:notes`、Twitter画像をMisskeyへ添付する場合は`write:drive`も必要） |
 | `MISSKEY_MEDIA_HOST` | Misskeyのメディアストレージホスト（例: s3.example.tld）※SSRF対策用 |
+| `TWITTER_MEDIA_HOSTS` | Twitter/Xのメディア取得を許可するホストのカンマ区切りリスト（デフォルト: `pbs.twimg.com,video.twimg.com`）※SSRF対策用 |
 | `API_KEY` | Twitter APIキー |
 | `API_KEY_SECRET` | Twitter APIキーシークレット |
 | `ACCESS_TOKEN` | Twitterアクセストークン |
@@ -147,6 +148,7 @@ curl --request GET \
 - Misskeyでノートが公開されると、webhookが呼び出され、ノートの内容がTwitterに投稿されます
   - 画像付きのノートもテキストのみのノートもTwitter APIを使用して投稿
 - Twitterでツイートが投稿されると、Twitter Webhookを通じてAccount Activity API payloadが呼び出され、Misskeyにノートとして保存されます
+  - 画像付きツイートは画像をMisskey Driveへアップロードし、ノートに添付します
 
 ## エンドポイント
 
