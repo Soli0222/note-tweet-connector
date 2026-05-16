@@ -22,12 +22,12 @@ var httpClient = &http.Client{
 }
 
 // CreateNote creates a new note on Misskey
-func CreateNote(ctx context.Context, host, token, text string) error {
+func CreateNote(ctx context.Context, host, token, text string) (string, error) {
 	return CreateNoteWithFiles(ctx, host, token, text, nil)
 }
 
 // CreateNoteWithFiles creates a new note on Misskey with optional file attachments.
-func CreateNoteWithFiles(ctx context.Context, host, token, text string, fileIDs []string) error {
+func CreateNoteWithFiles(ctx context.Context, host, token, text string, fileIDs []string) (string, error) {
 	endpoint := "https://" + host + "/api/notes/create"
 
 	jsonData := map[string]interface{}{}
@@ -41,13 +41,13 @@ func CreateNoteWithFiles(ctx context.Context, host, token, text string, fileIDs 
 	jsonBytes, err := json.Marshal(jsonData)
 	if err != nil {
 		slog.Error("Failed to marshal json", slog.Any("error", err))
-		return err
+		return "", err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBuffer(jsonBytes))
 	if err != nil {
 		slog.Error("Failed to create request", slog.Any("error", err))
-		return err
+		return "", err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -56,23 +56,41 @@ func CreateNoteWithFiles(ctx context.Context, host, token, text string, fileIDs 
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		slog.Error("Failed to send request", slog.Any("error", err))
-		return err
+		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		slog.Error("Failed to send request",
 			slog.Int("status_code", resp.StatusCode),
 			slog.String("status", resp.Status),
 			slog.String("endpoint", endpoint))
-		return fmt.Errorf("HTTP request failed with status %d", resp.StatusCode)
+		return "", fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	var createResp struct {
+		CreatedNote struct {
+			ID string `json:"id"`
+		} `json:"createdNote"`
+	}
+	if err := json.Unmarshal(respBytes, &createResp); err != nil {
+		return "", fmt.Errorf("failed to parse note create response: %w", err)
+	}
+	if createResp.CreatedNote.ID == "" {
+		return "", fmt.Errorf("note create response did not include note id")
 	}
 
 	slog.Debug("Successfully posted note to Misskey",
 		slog.String("endpoint", endpoint),
+		slog.String("note_id", createResp.CreatedNote.ID),
 		slog.Int("status_code", resp.StatusCode))
 
-	return nil
+	return createResp.CreatedNote.ID, nil
 }
 
 // UploadDriveFileFromURL downloads an image from fileURL and uploads it to Misskey Drive.

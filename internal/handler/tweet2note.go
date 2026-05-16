@@ -65,7 +65,7 @@ var rnAtPattern = regexp.MustCompile(`^RN\s*\[at\]`)
 var createMisskeyNoteWithFiles = misskey.CreateNoteWithFiles
 var uploadMisskeyDriveFileFromURL = misskey.UploadDriveFileFromURL
 
-func Tweet2NoteHandler(ctx context.Context, data []byte, contentTracker *tracker.ContentTracker, m *metrics.Metrics) error {
+func Tweet2NoteHandler(ctx context.Context, data []byte, crossPostTracker *tracker.CrossPostTracker, m *metrics.Metrics) error {
 	m.Tweet2NoteTotal.Inc()
 
 	tweets, err := parseAccountActivityPayload(data)
@@ -76,7 +76,7 @@ func Tweet2NoteHandler(ctx context.Context, data []byte, contentTracker *tracker
 	}
 
 	for _, tweet := range tweets {
-		if err := HandleIncomingTweet(ctx, tweet, contentTracker, m); err != nil {
+		if err := HandleIncomingTweet(ctx, tweet, crossPostTracker, m); err != nil {
 			return err
 		}
 	}
@@ -84,7 +84,21 @@ func Tweet2NoteHandler(ctx context.Context, data []byte, contentTracker *tracker
 	return nil
 }
 
-func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, contentTracker *tracker.ContentTracker, m *metrics.Metrics) error {
+func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, crossPostTracker *tracker.CrossPostTracker, m *metrics.Metrics) error {
+	if tweet.ID == "" {
+		slog.Warn("Tweet ID is missing, skipping")
+		m.Tweet2NoteSkipped.WithLabelValues("missing_id").Inc()
+		return nil
+	}
+
+	if crossPostTracker.HasTweet(tweet.ID) {
+		slog.Info("Known cross-posted tweet, skipping",
+			slog.String("tweet_id", tweet.ID))
+		m.Tweet2NoteSkipped.WithLabelValues("crosspost").Inc()
+		m.TrackerDuplicatesHit.Inc()
+		return nil
+	}
+
 	tweetText := tweet.Text
 
 	if rtAtPattern.MatchString(tweetText) {
@@ -114,22 +128,6 @@ func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, contentTracke
 		return fmt.Errorf("MISSKEY_TOKEN environment variable is not set")
 	}
 
-	trackerKey := tweetText
-	if trackerKey == "" {
-		trackerKey = tweet.URL
-	}
-	if trackerKey == "" {
-		trackerKey = tweet.ID
-	}
-
-	// Atomically check and mark as processed to prevent race conditions
-	if !contentTracker.MarkProcessedIfNotExists(trackerKey) {
-		slog.Info("Tweet already processed, skipping")
-		m.Tweet2NoteSkipped.WithLabelValues("duplicate").Inc()
-		m.TrackerDuplicatesHit.Inc()
-		return nil
-	}
-
 	fileIDs := make([]string, 0, min(len(tweet.MediaURLs), 4))
 	for i := 0; i < len(tweet.MediaURLs) && i < 4; i++ {
 		fileID, err := uploadMisskeyDriveFileFromURL(ctx, misskeyHost, misskeyToken, tweet.MediaURLs[i])
@@ -143,11 +141,18 @@ func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, contentTracke
 		fileIDs = append(fileIDs, fileID)
 	}
 
-	err := createMisskeyNoteWithFiles(ctx, misskeyHost, misskeyToken, tweetText, fileIDs)
+	noteID, err := createMisskeyNoteWithFiles(ctx, misskeyHost, misskeyToken, tweetText, fileIDs)
 
 	if err == nil {
+		if noteID == "" {
+			m.Tweet2NoteErrors.Inc()
+			return errMissingPostedID("misskey note")
+		}
+		crossPostTracker.RememberTweetToMisskey(tweet.ID, noteID)
 		escapedText := strings.ReplaceAll(tweetText, "\n", "\\n")
 		slog.Info("Successfully forwarded tweet to note",
+			slog.String("tweet_id", tweet.ID),
+			slog.String("note_id", noteID),
 			slog.String("text_preview", escapedText[:min(100, len(escapedText))]),
 			slog.String("tweet_url", tweet.URL),
 			slog.Bool("has_media", len(fileIDs) > 0),
