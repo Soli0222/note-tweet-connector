@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -18,8 +19,10 @@ import (
 )
 
 const (
-	UploadMediaEndpoint = "https://upload.twitter.com/1.1/media/upload.json"
+	UploadMediaEndpoint = "https://api.x.com/2/media/upload"
 	ManageTweetEndpoint = "https://api.twitter.com/2/tweets"
+	mediaChunkSize      = 4 * 1024 * 1024
+	maxMediaStatusPolls = 30
 )
 
 // httpClient is a reusable HTTP client with timeout
@@ -28,7 +31,21 @@ var httpClient = &http.Client{
 }
 
 type UploadMediaResponse struct {
-	MediaIDString string `json:"media_id_string"`
+	Data struct {
+		ID             string          `json:"id"`
+		MediaKey       string          `json:"media_key"`
+		ProcessingInfo *ProcessingInfo `json:"processing_info"`
+	} `json:"data"`
+}
+
+type ProcessingInfo struct {
+	State          string `json:"state"`
+	CheckAfterSecs int    `json:"check_after_secs"`
+	Error          struct {
+		Code    int    `json:"code"`
+		Name    string `json:"name"`
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 // validateMediaURL validates that the media URL is from an allowed host
@@ -70,6 +87,14 @@ func loadTwitterEnv() (string, string, string, string, error) {
 	return apiKey, apiKeySecret, accessToken, accessTokenSecret, nil
 }
 
+func loadTwitterUserAccessToken() (string, error) {
+	token := os.Getenv("TWITTER_USER_ACCESS_TOKEN")
+	if token == "" {
+		return "", fmt.Errorf("TWITTER_USER_ACCESS_TOKEN environment variable is not set")
+	}
+	return token, nil
+}
+
 // Post posts a tweet via Twitter API.
 func Post(ctx context.Context, text string) error {
 	return PostWithMedia(ctx, text, nil)
@@ -94,7 +119,7 @@ func PostWithMedia(ctx context.Context, text string, fileURLs []string) error {
 
 	var mediaIDs []string
 	for i := 0; i < limit; i++ {
-		mediaID, err := uploadMediaFromURL(ctx, oauthClient, fileURLs[i])
+		mediaID, err := uploadMediaFromURL(ctx, fileURLs[i])
 		if err != nil {
 			return err
 		}
@@ -144,7 +169,7 @@ func postTweet(ctx context.Context, oauthClient *http.Client, text string, media
 	return nil
 }
 
-func uploadMediaFromURL(ctx context.Context, oauthClient *http.Client, fileURL string) (string, error) {
+func uploadMediaFromURL(ctx context.Context, fileURL string) (string, error) {
 	// Validate URL to prevent SSRF attacks
 	if err := validateMediaURL(fileURL); err != nil {
 		slog.Error("Invalid media URL", slog.String("url", fileURL), slog.Any("error", err))
@@ -162,45 +187,238 @@ func uploadMediaFromURL(ctx context.Context, oauthClient *http.Client, fileURL s
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("media download failed with status %d", resp.StatusCode)
+	}
+
+	mediaBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if len(mediaBytes) == 0 {
+		return "", fmt.Errorf("media body is empty")
+	}
+
+	mediaType := resp.Header.Get("Content-Type")
+	mediaType = strings.Split(mediaType, ";")[0]
+	if mediaType == "" {
+		mediaType = mediaTypeFromURL(fileURL)
+	}
+	mediaCategory, err := mediaCategoryForType(mediaType)
+	if err != nil {
+		return "", err
+	}
+
+	bearerToken, err := loadTwitterUserAccessToken()
+	if err != nil {
+		return "", err
+	}
+
+	mediaID, err := initMediaUpload(ctx, bearerToken, mediaType, mediaCategory, len(mediaBytes))
+	if err != nil {
+		return "", err
+	}
+
+	for segmentIndex, offset := 0, 0; offset < len(mediaBytes); segmentIndex, offset = segmentIndex+1, offset+mediaChunkSize {
+		end := offset + mediaChunkSize
+		if end > len(mediaBytes) {
+			end = len(mediaBytes)
+		}
+		if err := appendMediaUpload(ctx, bearerToken, mediaID, segmentIndex, mediaBytes[offset:end]); err != nil {
+			return "", err
+		}
+	}
+
+	if err := finalizeMediaUpload(ctx, bearerToken, mediaID); err != nil {
+		return "", err
+	}
+
+	return mediaID, nil
+}
+
+func initMediaUpload(ctx context.Context, bearerToken, mediaType, mediaCategory string, totalBytes int) (string, error) {
+	fields := map[string]string{
+		"command":        "INIT",
+		"media_type":     mediaType,
+		"media_category": mediaCategory,
+		"total_bytes":    fmt.Sprintf("%d", totalBytes),
+	}
+
+	var uploadResponse UploadMediaResponse
+	if err := postMediaForm(ctx, bearerToken, fields, "", nil, &uploadResponse); err != nil {
+		return "", err
+	}
+	if uploadResponse.Data.ID == "" {
+		return "", fmt.Errorf("media INIT response did not include data.id")
+	}
+	return uploadResponse.Data.ID, nil
+}
+
+func appendMediaUpload(ctx context.Context, bearerToken, mediaID string, segmentIndex int, mediaBytes []byte) error {
+	fields := map[string]string{
+		"command":       "APPEND",
+		"media_id":      mediaID,
+		"segment_index": fmt.Sprintf("%d", segmentIndex),
+	}
+	return postMediaForm(ctx, bearerToken, fields, "media", mediaBytes, nil)
+}
+
+func finalizeMediaUpload(ctx context.Context, bearerToken, mediaID string) error {
+	fields := map[string]string{
+		"command":  "FINALIZE",
+		"media_id": mediaID,
+	}
+
+	var uploadResponse UploadMediaResponse
+	if err := postMediaForm(ctx, bearerToken, fields, "", nil, &uploadResponse); err != nil {
+		return err
+	}
+	if uploadResponse.Data.ProcessingInfo == nil {
+		return nil
+	}
+	return waitForMediaProcessing(ctx, bearerToken, mediaID, uploadResponse.Data.ProcessingInfo)
+}
+
+func waitForMediaProcessing(ctx context.Context, bearerToken, mediaID string, processingInfo *ProcessingInfo) error {
+	for i := 0; i < maxMediaStatusPolls; i++ {
+		switch processingInfo.State {
+		case "succeeded":
+			return nil
+		case "failed":
+			return fmt.Errorf("media processing failed: %s", processingInfo.Error.Message)
+		}
+
+		wait := time.Duration(processingInfo.CheckAfterSecs) * time.Second
+		if wait <= 0 {
+			wait = time.Second
+		}
+
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+
+		statusURL := UploadMediaEndpoint + "?command=STATUS&media_id=" + url.QueryEscape(mediaID)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, statusURL, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+bearerToken)
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return err
+		}
+		respBytes, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return readErr
+		}
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return fmt.Errorf("media STATUS failed with status %d: %s", resp.StatusCode, string(respBytes))
+		}
+
+		var uploadResponse UploadMediaResponse
+		if err := json.Unmarshal(respBytes, &uploadResponse); err != nil {
+			return err
+		}
+		if uploadResponse.Data.ProcessingInfo == nil {
+			return nil
+		}
+		processingInfo = uploadResponse.Data.ProcessingInfo
+	}
+
+	return fmt.Errorf("media processing did not complete after %d polls", maxMediaStatusPolls)
+}
+
+func postMediaForm(ctx context.Context, bearerToken string, fields map[string]string, fileField string, fileBytes []byte, responseBody interface{}) error {
 	bodyBuffer := &bytes.Buffer{}
 	writer := multipart.NewWriter(bodyBuffer)
 
-	part, err := writer.CreateFormFile("media", "image")
-	if err != nil {
-		return "", err
+	for key, value := range fields {
+		if err := writer.WriteField(key, value); err != nil {
+			return err
+		}
 	}
 
-	if _, err = io.Copy(part, resp.Body); err != nil {
-		return "", err
-	}
-	if err = writer.Close(); err != nil {
-		return "", err
+	if fileField != "" {
+		part, err := writer.CreateFormFile(fileField, "media")
+		if err != nil {
+			return err
+		}
+		if _, err := part.Write(fileBytes); err != nil {
+			return err
+		}
 	}
 
-	uploadReq, err := http.NewRequestWithContext(ctx, "POST", UploadMediaEndpoint, bodyBuffer)
-	if err != nil {
-		return "", err
+	if err := writer.Close(); err != nil {
+		return err
 	}
+
+	uploadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, UploadMediaEndpoint, bodyBuffer)
+	if err != nil {
+		return err
+	}
+	uploadReq.Header.Set("Authorization", "Bearer "+bearerToken)
 	uploadReq.Header.Set("Content-Type", writer.FormDataContentType())
 
-	uploadResp, err := oauthClient.Do(uploadReq)
+	uploadResp, err := httpClient.Do(uploadReq)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer func() { _ = uploadResp.Body.Close() }()
 
 	respBytes, err := io.ReadAll(uploadResp.Body)
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	return extractMediaID(string(respBytes))
+	if uploadResp.StatusCode < http.StatusOK || uploadResp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("media upload request failed with status %d: %s", uploadResp.StatusCode, string(respBytes))
+	}
+
+	if responseBody == nil || len(respBytes) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(respBytes, responseBody); err != nil {
+		return fmt.Errorf("failed to parse media upload response: %w", err)
+	}
+	return nil
 }
 
-func extractMediaID(respBody string) (string, error) {
-	var uploadResponse UploadMediaResponse
-	if err := json.Unmarshal([]byte(respBody), &uploadResponse); err != nil {
-		return "", fmt.Errorf("failed to parse JSON response: %w", err)
+func mediaCategoryForType(mediaType string) (string, error) {
+	switch {
+	case strings.HasPrefix(mediaType, "image/gif"):
+		return "tweet_gif", nil
+	case strings.HasPrefix(mediaType, "image/"):
+		return "tweet_image", nil
+	case strings.HasPrefix(mediaType, "video/"):
+		return "tweet_video", nil
+	default:
+		return "", fmt.Errorf("unsupported media type %q", mediaType)
 	}
-	return uploadResponse.MediaIDString, nil
+}
+
+func mediaTypeFromURL(fileURL string) string {
+	parsed, err := url.Parse(fileURL)
+	if err != nil {
+		return ""
+	}
+	switch strings.ToLower(path.Ext(parsed.Path)) {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".mp4":
+		return "video/mp4"
+	default:
+		return ""
+	}
 }

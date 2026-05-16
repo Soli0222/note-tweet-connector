@@ -53,6 +53,7 @@ cp .env.example .env
 | `API_KEY_SECRET` | Twitter APIキーシークレット |
 | `ACCESS_TOKEN` | Twitterアクセストークン |
 | `ACCESS_TOKEN_SECRET` | Twitterアクセストークンシークレット |
+| `TWITTER_USER_ACCESS_TOKEN` | Media API v2 chunked uploadとWebhook/Account Activity APIの操作に使うOAuth 2.0 User Access Token |
 | `TWITTER_WEBHOOK_CONSUMER_SECRET` | Twitter WebhookのCRC・署名検証に使うConsumer Secret（未設定時は`API_KEY_SECRET`を使用） |
 | `TWITTER_USERNAME` | Twitterのユーザー名（payloadから取得できない場合の補助用） |
 
@@ -102,6 +103,44 @@ helm install note-tweet-connector soli0222/note-tweet-connector -f values.yaml
 4. Misskeyの管理画面でwebhookを設定します（User-Agent: "Misskey-Hooks"、X-Misskey-Hook-Secret: 環境変数と同じ値）
 5. Twitter Webhooks APIで `https://your-domain.example/twitter/webhook` を登録します
 6. Account Activity APIで対象Twitterアカウントをwebhookへsubscribeします
+
+### Twitter Webhookの登録
+
+Webhook URLはHTTPSで公開し、URLにポート番号を含めないでください。登録時にTwitterから `GET /twitter/webhook?crc_token=...` が呼ばれ、このアプリがCRC応答を返します。
+
+```bash
+curl --request POST \
+  --url https://api.x.com/2/webhooks \
+  --header "Authorization: Bearer ${TWITTER_USER_ACCESS_TOKEN}" \
+  --header "Content-Type: application/json" \
+  --data '{"url":"https://your-domain.example/twitter/webhook"}'
+```
+
+登録済みWebhookの確認:
+
+```bash
+curl --request GET \
+  --url https://api.x.com/2/webhooks \
+  --header "Authorization: Bearer ${TWITTER_USER_ACCESS_TOKEN}"
+```
+
+Account Activity subscriptionの作成:
+
+```bash
+curl --request POST \
+  --url https://api.x.com/2/account_activity/webhooks/${WEBHOOK_ID}/subscriptions/all \
+  --header "Authorization: Bearer ${TWITTER_USER_ACCESS_TOKEN}" \
+  --header "Content-Type: application/json" \
+  --data '{}'
+```
+
+subscriptionの確認:
+
+```bash
+curl --request GET \
+  --url https://api.x.com/2/account_activity/webhooks/${WEBHOOK_ID}/subscriptions/all/list \
+  --header "Authorization: Bearer ${TWITTER_USER_ACCESS_TOKEN}"
+```
 
 ### 動作の流れ
 
