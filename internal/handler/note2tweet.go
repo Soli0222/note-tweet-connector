@@ -49,6 +49,22 @@ func Note2TweetHandler(ctx context.Context, data []byte, contentTracker *tracker
 		return err
 	}
 
+	if payload.Body.Note.Visibility != "public" {
+		slog.Info("Note is not public, skipping",
+			slog.String("note_id", payload.Body.Note.ID),
+			slog.String("visibility", payload.Body.Note.Visibility))
+		m.Note2TweetSkipped.WithLabelValues("not_public").Inc()
+		return nil
+	}
+
+	if payload.Body.Note.LocalOnly {
+		slog.Info("Note is local only, skipping",
+			slog.String("note_id", payload.Body.Note.ID),
+			slog.Bool("local_only", payload.Body.Note.LocalOnly))
+		m.Note2TweetSkipped.WithLabelValues("local_only").Inc()
+		return nil
+	}
+
 	noteText := payload.Body.Note.Text
 	noteURI := payload.Server + "/notes/" + payload.Body.Note.ID
 
@@ -74,14 +90,6 @@ func Note2TweetHandler(ctx context.Context, data []byte, contentTracker *tracker
 			slog.String("note_id", payload.Body.Note.ID),
 			slog.String("text_preview", escapedText[:min(50, len(escapedText))]))
 		m.Note2TweetSkipped.WithLabelValues("rt_pattern").Inc()
-		return nil
-	}
-
-	if payload.Body.Note.Visibility != "public" {
-		slog.Info("Note is not public, skipping",
-			slog.String("note_id", payload.Body.Note.ID),
-			slog.String("visibility", payload.Body.Note.Visibility))
-		m.Note2TweetSkipped.WithLabelValues("not_public").Inc()
 		return nil
 	}
 

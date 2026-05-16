@@ -246,6 +246,23 @@ func TestNote2TweetHandler_SkipConditions(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "skip local only note",
+			payload: `{
+				"body": {
+					"note": {
+						"id": "note-local-only",
+						"text": "Local only note",
+						"visibility": "public",
+						"localOnly": true,
+						"files": [],
+						"cw": null
+					}
+				},
+				"server": "https://misskey.example"
+			}`,
+			wantErr: false,
+		},
+		{
 			name: "skip home visibility",
 			payload: `{
 				"body": {
