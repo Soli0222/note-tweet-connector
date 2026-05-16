@@ -1,0 +1,13 @@
+{
+  "for_user_id": "111111111111111111",
+  "tweet_create_events": [
+    {
+      "id_str": "1234567890123456789",
+      "text": "RN [at]dummy_user This is a dummy tweet for testing purposes.\n#Testing #DummyData\nhttps://t.co/dummylink123",
+      "user": {
+        "id_str": "111111111111111111",
+        "screen_name": "dummy_user"
+      }
+    }
+  ]
+}

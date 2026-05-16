@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -10,50 +9,83 @@ import (
 	"github.com/Soli0222/note-tweet-connector/internal/tracker"
 )
 
-func TestParseTweetPayload(t *testing.T) {
+func TestParseAccountActivityPayload(t *testing.T) {
 	tests := []struct {
 		name    string
 		payload string
 		wantErr bool
-		check   func(*testing.T, *payloadTweetData)
+		check   func(*testing.T, []IncomingTweet)
 	}{
 		{
-			name: "valid tweet payload",
+			name: "valid tweet_create_events payload",
 			payload: `{
-				"body": {
-					"tweet": {
+				"for_user_id": "111",
+				"tweet_create_events": [
+					{
+						"id_str": "123456789",
 						"text": "Hello, world!",
-						"url": "https://twitter.com/user/status/123456789"
+						"user": {
+							"id_str": "111",
+							"screen_name": "dummy_user"
+						}
 					}
-				}
+				]
 			}`,
-			wantErr: false,
-			check: func(t *testing.T, p *payloadTweetData) {
-				if p.Body.Tweet.Text != "Hello, world!" {
-					t.Errorf("expected text 'Hello, world!', got '%s'", p.Body.Tweet.Text)
+			check: func(t *testing.T, tweets []IncomingTweet) {
+				if len(tweets) != 1 {
+					t.Fatalf("expected 1 tweet, got %d", len(tweets))
 				}
-				if p.Body.Tweet.Url != "https://twitter.com/user/status/123456789" {
-					t.Errorf("expected URL 'https://twitter.com/user/status/123456789', got '%s'", p.Body.Tweet.Url)
+				if tweets[0].Text != "Hello, world!" {
+					t.Errorf("expected text 'Hello, world!', got '%s'", tweets[0].Text)
+				}
+				if tweets[0].URL != "https://twitter.com/dummy_user/status/123456789" {
+					t.Errorf("unexpected URL: %s", tweets[0].URL)
 				}
 			},
 		},
 		{
-			name: "tweet with hashtags - IFTTT format",
+			name: "full_text takes precedence",
 			payload: `{
-				"body": {
-					"tweet": {
-						"text": "Dummy Song / Dummy Artist\n#NowPlaying #Testing\nhttps://t.co/dummylink123",
-						"url": "https://twitter.com/dummy_user/status/1234567890123456789"
+				"for_user_id": "111",
+				"tweet_create_events": [
+					{
+						"id_str": "123456789",
+						"text": "truncated...",
+						"full_text": "Full tweet text",
+						"user": {
+							"id_str": "111",
+							"screen_name": "dummy_user"
+						}
 					}
-				}
+				]
 			}`,
-			wantErr: false,
-			check: func(t *testing.T, p *payloadTweetData) {
-				if p.Body.Tweet.Text != "Dummy Song / Dummy Artist\n#NowPlaying #Testing\nhttps://t.co/dummylink123" {
-					t.Errorf("unexpected text: %s", p.Body.Tweet.Text)
+			check: func(t *testing.T, tweets []IncomingTweet) {
+				if len(tweets) != 1 {
+					t.Fatalf("expected 1 tweet, got %d", len(tweets))
 				}
-				if p.Body.Tweet.Url != "https://twitter.com/dummy_user/status/1234567890123456789" {
-					t.Errorf("unexpected URL: %s", p.Body.Tweet.Url)
+				if tweets[0].Text != "Full tweet text" {
+					t.Errorf("expected full_text, got '%s'", tweets[0].Text)
+				}
+			},
+		},
+		{
+			name: "mention from another user is ignored",
+			payload: `{
+				"for_user_id": "111",
+				"tweet_create_events": [
+					{
+						"id_str": "123456789",
+						"text": "@dummy_user hello",
+						"user": {
+							"id_str": "222",
+							"screen_name": "other_user"
+						}
+					}
+				]
+			}`,
+			check: func(t *testing.T, tweets []IncomingTweet) {
+				if len(tweets) != 0 {
+					t.Fatalf("expected no tweets, got %d", len(tweets))
 				}
 			},
 		},
@@ -61,15 +93,13 @@ func TestParseTweetPayload(t *testing.T) {
 			name:    "invalid JSON",
 			payload: `{invalid json}`,
 			wantErr: true,
-			check:   nil,
 		},
 		{
 			name:    "empty body",
 			payload: `{}`,
-			wantErr: false,
-			check: func(t *testing.T, p *payloadTweetData) {
-				if p.Body.Tweet.Text != "" {
-					t.Errorf("expected empty text, got '%s'", p.Body.Tweet.Text)
+			check: func(t *testing.T, tweets []IncomingTweet) {
+				if len(tweets) != 0 {
+					t.Fatalf("expected no tweets, got %d", len(tweets))
 				}
 			},
 		},
@@ -77,12 +107,12 @@ func TestParseTweetPayload(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := parseTweetPayload([]byte(tt.payload))
+			result, err := parseAccountActivityPayload([]byte(tt.payload))
 			if (err != nil) != tt.wantErr {
-				t.Errorf("parseTweetPayload() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("parseAccountActivityPayload() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if tt.check != nil && result != nil {
+			if tt.check != nil {
 				tt.check(t, result)
 			}
 		})
@@ -94,36 +124,26 @@ func TestTweet2NoteHandler_SkipConditions(t *testing.T) {
 	contentTracker := tracker.NewContentTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
-	// Set required environment variable for testing
 	t.Setenv("MISSKEY_HOST", "misskey.example")
 	t.Setenv("MISSKEY_TOKEN", "test-token")
 
-	tests := []struct {
-		name    string
-		payload string
-		wantErr bool
-	}{
-		{
-			name: "skip RN [at] pattern",
-			payload: `{
-				"body": {
-					"tweet": {
-						"text": "RN [at] someone This is a renote",
-						"url": "https://twitter.com/user/status/123"
-					}
+	payload := `{
+		"for_user_id": "111",
+		"tweet_create_events": [
+			{
+				"id_str": "123",
+				"text": "RN [at] someone This is a renote",
+				"user": {
+					"id_str": "111",
+					"screen_name": "dummy_user"
 				}
-			}`,
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := Tweet2NoteHandler(ctx, []byte(tt.payload), contentTracker, m)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Tweet2NoteHandler() error = %v, wantErr %v", err, tt.wantErr)
 			}
-		})
+		]
+	}`
+
+	err := Tweet2NoteHandler(ctx, []byte(payload), contentTracker, m)
+	if err != nil {
+		t.Errorf("Tweet2NoteHandler() should not return error for RN pattern, got %v", err)
 	}
 }
 
@@ -132,28 +152,26 @@ func TestTweet2NoteHandler_DuplicateDetection(t *testing.T) {
 	contentTracker := tracker.NewContentTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
-	// Set required environment variables
 	t.Setenv("MISSKEY_HOST", "misskey.example")
 	t.Setenv("MISSKEY_TOKEN", "test-token")
 
-	// Test duplicate detection by checking the tracker directly
-	// We use the same content hash logic as the handler
 	testContent := "Duplicate tweet content for testing"
-
-	// Register content in tracker (simulating first tweet processed)
 	contentTracker.MarkProcessed(testContent)
 
-	// Second tweet with same content should be detected as duplicate
 	payload := `{
-		"body": {
-			"tweet": {
+		"for_user_id": "111",
+		"tweet_create_events": [
+			{
+				"id_str": "222",
 				"text": "Duplicate tweet content for testing",
-				"url": "https://twitter.com/user/status/222"
+				"user": {
+					"id_str": "111",
+					"screen_name": "dummy_user"
+				}
 			}
-		}
+		]
 	}`
 
-	// This should detect duplicate and skip (no API call)
 	err := Tweet2NoteHandler(ctx, []byte(payload), contentTracker, m)
 	if err != nil {
 		t.Errorf("Tweet2NoteHandler() should not return error for duplicate, got %v", err)
@@ -165,7 +183,6 @@ func TestTweet2NoteHandler_InvalidJSON(t *testing.T) {
 	contentTracker := tracker.NewContentTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
-	// Set required environment variables
 	t.Setenv("MISSKEY_HOST", "misskey.example")
 	t.Setenv("MISSKEY_TOKEN", "test-token")
 
@@ -199,67 +216,69 @@ func TestRnAtPattern(t *testing.T) {
 	}
 }
 
-func TestPayloadTweetDataJSON(t *testing.T) {
-	original := &payloadTweetData{}
-	original.Body.Tweet.Text = "test tweet"
-	original.Body.Tweet.Url = "https://twitter.com/user/status/123"
-
-	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
-
-	var parsed payloadTweetData
-	err = json.Unmarshal(data, &parsed)
-	if err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-
-	if parsed.Body.Tweet.Text != original.Body.Tweet.Text {
-		t.Errorf("Tweet.Text mismatch: got %s, want %s", parsed.Body.Tweet.Text, original.Body.Tweet.Text)
-	}
-	if parsed.Body.Tweet.Url != original.Body.Tweet.Url {
-		t.Errorf("Tweet.Url mismatch: got %s, want %s", parsed.Body.Tweet.Url, original.Body.Tweet.Url)
+func TestBuildTweetURL(t *testing.T) {
+	got := buildTweetURL("dummy_user", "123456789")
+	want := "https://twitter.com/dummy_user/status/123456789"
+	if got != want {
+		t.Fatalf("buildTweetURL() = %q, want %q", got, want)
 	}
 }
 
-func TestTweetURLExtraction(t *testing.T) {
+func TestParseAccountActivityPayload_UsernameFallback(t *testing.T) {
+	t.Setenv("TWITTER_USERNAME", "fallback_user")
+
 	payload := `{
-		"body": {
-			"tweet": {
-				"text": "Check this out https://t.co/abc123",
-				"url": "https://twitter.com/user/status/123456"
+		"for_user_id": "111",
+		"tweet_create_events": [
+			{
+				"id_str": "123456789",
+				"text": "Hello, world!",
+				"user": {
+					"id_str": "111"
+				}
 			}
-		}
+		]
 	}`
 
-	result, err := parseTweetPayload([]byte(payload))
+	result, err := parseAccountActivityPayload([]byte(payload))
 	if err != nil {
-		t.Fatalf("parseTweetPayload() error = %v", err)
+		t.Fatalf("parseAccountActivityPayload() error = %v", err)
 	}
-
-	if result.Body.Tweet.Url != "https://twitter.com/user/status/123456" {
-		t.Errorf("expected URL 'https://twitter.com/user/status/123456', got '%s'", result.Body.Tweet.Url)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 tweet, got %d", len(result))
+	}
+	if result[0].Username != "fallback_user" {
+		t.Fatalf("Username = %q, want fallback_user", result[0].Username)
+	}
+	if result[0].URL != "https://twitter.com/fallback_user/status/123456789" {
+		t.Fatalf("URL = %q", result[0].URL)
 	}
 }
 
 func TestTweet2NoteHandler_JapaneseContent(t *testing.T) {
 	payload := `{
-		"body": {
-			"tweet": {
+		"for_user_id": "111",
+		"tweet_create_events": [
+			{
+				"id_str": "1234567890123456789",
 				"text": "ダミーソング / ダミーアーティスト\n#NowPlaying #Testing\nhttps://t.co/dummylink123",
-				"url": "https://twitter.com/dummy_user/status/1234567890123456789"
+				"user": {
+					"id_str": "111",
+					"screen_name": "dummy_user"
+				}
 			}
-		}
+		]
 	}`
 
-	result, err := parseTweetPayload([]byte(payload))
+	result, err := parseAccountActivityPayload([]byte(payload))
 	if err != nil {
-		t.Fatalf("parseTweetPayload() error = %v", err)
+		t.Fatalf("parseAccountActivityPayload() error = %v", err)
 	}
 
-	// Verify Japanese content is parsed correctly
-	if result.Body.Tweet.Text != "ダミーソング / ダミーアーティスト\n#NowPlaying #Testing\nhttps://t.co/dummylink123" {
-		t.Errorf("Japanese content not parsed correctly: %s", result.Body.Tweet.Text)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 tweet, got %d", len(result))
+	}
+	if result[0].Text != "ダミーソング / ダミーアーティスト\n#NowPlaying #Testing\nhttps://t.co/dummylink123" {
+		t.Errorf("Japanese content not parsed correctly: %s", result[0].Text)
 	}
 }

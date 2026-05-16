@@ -43,27 +43,30 @@ func TestWithTestData_MisskeyNote(t *testing.T) {
 	}
 }
 
-func TestWithTestData_IFTTTTweet(t *testing.T) {
+func TestWithTestData_AccountActivityTweet(t *testing.T) {
 	testdataDir := findTestdataDir(t)
 
-	data, err := os.ReadFile(filepath.Join(testdataDir, "ifttt_tweet.json"))
+	data, err := os.ReadFile(filepath.Join(testdataDir, "account_activity_tweet.json"))
 	if err != nil {
 		t.Fatalf("Failed to read test data: %v", err)
 	}
 
-	payload, err := parseTweetPayload(data)
+	tweets, err := parseAccountActivityPayload(data)
 	if err != nil {
-		t.Fatalf("Failed to parse IFTTT tweet: %v", err)
+		t.Fatalf("Failed to parse Account Activity tweet: %v", err)
+	}
+	if len(tweets) != 1 {
+		t.Fatalf("expected 1 tweet, got %d", len(tweets))
 	}
 
 	// Verify parsed values
 	// Note: text starts with "RN [at]" to trigger skip condition in handler tests
 	expectedText := "RN [at]dummy_user This is a dummy tweet for testing purposes.\n#Testing #DummyData\nhttps://t.co/dummylink123"
-	if payload.Body.Tweet.Text != expectedText {
-		t.Errorf("unexpected text: %s", payload.Body.Tweet.Text)
+	if tweets[0].Text != expectedText {
+		t.Errorf("unexpected text: %s", tweets[0].Text)
 	}
-	if payload.Body.Tweet.Url != "https://twitter.com/dummy_user/status/1234567890123456789" {
-		t.Errorf("unexpected URL: %s", payload.Body.Tweet.Url)
+	if tweets[0].URL != "https://twitter.com/dummy_user/status/1234567890123456789" {
+		t.Errorf("unexpected URL: %s", tweets[0].URL)
 	}
 }
 
@@ -89,7 +92,7 @@ func TestWithTestData_Note2TweetHandler(t *testing.T) {
 func TestWithTestData_Tweet2NoteHandler(t *testing.T) {
 	testdataDir := findTestdataDir(t)
 
-	data, err := os.ReadFile(filepath.Join(testdataDir, "ifttt_tweet.json"))
+	data, err := os.ReadFile(filepath.Join(testdataDir, "account_activity_tweet.json"))
 	if err != nil {
 		t.Fatalf("Failed to read test data: %v", err)
 	}

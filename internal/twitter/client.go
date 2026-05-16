@@ -70,57 +70,9 @@ func loadTwitterEnv() (string, string, string, string, error) {
 	return apiKey, apiKeySecret, accessToken, accessTokenSecret, nil
 }
 
-// Post posts a tweet via IFTTT
+// Post posts a tweet via Twitter API.
 func Post(ctx context.Context, text string) error {
-	iftttEvent := os.Getenv("IFTTT_EVENT")
-	if iftttEvent == "" {
-		slog.Error("IFTTT event name not set")
-		return fmt.Errorf("IFTTT event name not set")
-	}
-
-	iftttKey := os.Getenv("IFTTT_KEY")
-	if iftttKey == "" {
-		slog.Error("IFTTT key not set")
-		return fmt.Errorf("IFTTT key not set")
-	}
-
-	iftttEndpoint := "https://maker.ifttt.com/trigger/" + iftttEvent + "/with/key/" + iftttKey
-
-	payload := map[string]string{
-		"value1": text,
-	}
-
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		slog.Error("Error marshaling IFTTT payload", slog.Any("error", err))
-		return err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", iftttEndpoint, bytes.NewBuffer(payloadBytes))
-	if err != nil {
-		slog.Error("Error creating IFTTT request", slog.Any("error", err))
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		slog.Error("Error sending POST request to IFTTT", slog.Any("error", err))
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		slog.Error("Non-OK response from IFTTT", slog.Int("status", resp.StatusCode))
-		return fmt.Errorf("IFTTT POST request failed with status %d", resp.StatusCode)
-	}
-
-	escapedText := strings.ReplaceAll(text, "\n", "\\n")
-	slog.Info("Successfully posted note to tweet via IFTTT",
-		slog.String("text_preview", escapedText[:min(100, len(escapedText))]),
-		slog.String("endpoint", iftttEvent))
-
-	return nil
+	return PostWithMedia(ctx, text, nil)
 }
 
 // PostWithMedia posts a tweet with media attachments via Twitter API
@@ -149,13 +101,16 @@ func PostWithMedia(ctx context.Context, text string, fileURLs []string) error {
 		mediaIDs = append(mediaIDs, mediaID)
 	}
 
+	return postTweet(ctx, oauthClient, text, mediaIDs)
+}
+
+func postTweet(ctx context.Context, oauthClient *http.Client, text string, mediaIDs []string) error {
 	tweetBodyMap := map[string]interface{}{"text": text}
 	if len(mediaIDs) > 0 {
 		tweetBodyMap["media"] = map[string]interface{}{
 			"media_ids": mediaIDs,
 		}
 	}
-
 	tweetBody, err := json.Marshal(tweetBodyMap)
 	if err != nil {
 		slog.Error("Error marshaling tweet data", slog.Any("error", err))
@@ -182,7 +137,7 @@ func PostWithMedia(ctx context.Context, text string, fileURLs []string) error {
 	}
 
 	escapedText := strings.ReplaceAll(text, "\n", "\\n")
-	slog.Info("Successfully posted note to tweet with media",
+	slog.Info("Successfully posted note to tweet",
 		slog.String("text_preview", escapedText[:min(100, len(escapedText))]),
 		slog.Int("media_count", len(mediaIDs)))
 
