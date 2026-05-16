@@ -2,6 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -128,38 +133,6 @@ func (s *server) webhookHandler(w http.ResponseWriter, r *http.Request) {
 		s.metrics.WebhookRequestsTotal.WithLabelValues("misskey", "success").Inc()
 		s.metrics.WebhookRequestDuration.WithLabelValues("misskey").Observe(time.Since(start).Seconds())
 
-	} else if strings.Contains(userAgent, "IFTTT-Hooks") {
-		start := time.Now()
-		secret := r.Header.Get("X-IFTTT-Hook-Secret")
-		expectedSecret := os.Getenv("IFTTT_HOOK_SECRET")
-		if expectedSecret == "" || secret != expectedSecret {
-			http.Error(w, "Invalid IFTTT secret", http.StatusUnauthorized)
-			slog.Error("Invalid IFTTT secret")
-			s.metrics.WebhookRequestsTotal.WithLabelValues("ifttt", "unauthorized").Inc()
-			s.metrics.WebhookRequestErrors.WithLabelValues("ifttt", "unauthorized").Inc()
-			return
-		}
-
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "Failed to read request body", http.StatusInternalServerError)
-			slog.Error("Failed to read request body", slog.Any("error", err))
-			s.metrics.WebhookRequestsTotal.WithLabelValues("ifttt", "error").Inc()
-			s.metrics.WebhookRequestErrors.WithLabelValues("ifttt", "read_body").Inc()
-			return
-		}
-
-		err = handler.Tweet2NoteHandler(r.Context(), body, s.contentTracker, s.metrics)
-		if err != nil {
-			http.Error(w, "Failed to handle request", http.StatusInternalServerError)
-			slog.Error("Failed to handle request", slog.Any("error", err))
-			s.metrics.WebhookRequestsTotal.WithLabelValues("ifttt", "error").Inc()
-			return
-		}
-
-		s.metrics.WebhookRequestsTotal.WithLabelValues("ifttt", "success").Inc()
-		s.metrics.WebhookRequestDuration.WithLabelValues("ifttt").Observe(time.Since(start).Seconds())
-
 	} else {
 		http.Error(w, "Unsupported User-Agent", http.StatusBadRequest)
 		slog.Error("Unsupported User-Agent", slog.Any("User-Agent", userAgent))
@@ -169,6 +142,103 @@ func (s *server) webhookHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *server) twitterWebhookHandler(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
+	switch r.Method {
+	case http.MethodGet:
+		crcToken := r.URL.Query().Get("crc_token")
+		if crcToken == "" {
+			http.Error(w, "Missing crc_token", http.StatusBadRequest)
+			s.metrics.WebhookRequestsTotal.WithLabelValues("twitter_crc", "bad_request").Inc()
+			s.metrics.WebhookRequestErrors.WithLabelValues("twitter_crc", "missing_crc_token").Inc()
+			return
+		}
+
+		responseToken, err := twitterResponseToken(crcToken)
+		if err != nil {
+			http.Error(w, "Twitter webhook secret is not configured", http.StatusInternalServerError)
+			slog.Error("Twitter webhook secret is not configured", slog.Any("error", err))
+			s.metrics.WebhookRequestsTotal.WithLabelValues("twitter_crc", "error").Inc()
+			s.metrics.WebhookRequestErrors.WithLabelValues("twitter_crc", "missing_secret").Inc()
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]string{"response_token": responseToken}); err != nil {
+			slog.Error("Failed to write CRC response", slog.Any("error", err))
+			s.metrics.WebhookRequestsTotal.WithLabelValues("twitter_crc", "error").Inc()
+			s.metrics.WebhookRequestErrors.WithLabelValues("twitter_crc", "write_response").Inc()
+			return
+		}
+
+		s.metrics.WebhookRequestsTotal.WithLabelValues("twitter_crc", "success").Inc()
+		s.metrics.WebhookRequestDuration.WithLabelValues("twitter_crc").Observe(time.Since(start).Seconds())
+	case http.MethodPost:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+			slog.Error("Failed to read request body", slog.Any("error", err))
+			s.metrics.WebhookRequestsTotal.WithLabelValues("twitter", "error").Inc()
+			s.metrics.WebhookRequestErrors.WithLabelValues("twitter", "read_body").Inc()
+			return
+		}
+
+		signature := r.Header.Get("x-twitter-webhooks-signature")
+		if ok, err := verifyTwitterSignature(body, signature); err != nil || !ok {
+			http.Error(w, "Invalid Twitter signature", http.StatusUnauthorized)
+			slog.Error("Invalid Twitter signature", slog.Any("error", err))
+			s.metrics.WebhookRequestsTotal.WithLabelValues("twitter", "unauthorized").Inc()
+			s.metrics.WebhookRequestErrors.WithLabelValues("twitter", "signature").Inc()
+			return
+		}
+
+		if err := handler.Tweet2NoteHandler(r.Context(), body, s.contentTracker, s.metrics); err != nil {
+			http.Error(w, "Failed to handle request", http.StatusInternalServerError)
+			slog.Error("Failed to handle request", slog.Any("error", err))
+			s.metrics.WebhookRequestsTotal.WithLabelValues("twitter", "error").Inc()
+			return
+		}
+
+		s.metrics.WebhookRequestsTotal.WithLabelValues("twitter", "success").Inc()
+		s.metrics.WebhookRequestDuration.WithLabelValues("twitter").Observe(time.Since(start).Seconds())
+		w.WriteHeader(http.StatusOK)
+	default:
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+	}
+}
+
+func twitterResponseToken(crcToken string) (string, error) {
+	signature, err := twitterHMAC([]byte(crcToken))
+	if err != nil {
+		return "", err
+	}
+	return "sha256=" + signature, nil
+}
+
+func verifyTwitterSignature(body []byte, signature string) (bool, error) {
+	expected, err := twitterHMAC(body)
+	if err != nil {
+		return false, err
+	}
+	want := "sha256=" + expected
+	return subtle.ConstantTimeCompare([]byte(signature), []byte(want)) == 1, nil
+}
+
+func twitterHMAC(message []byte) (string, error) {
+	secret := os.Getenv("TWITTER_WEBHOOK_CONSUMER_SECRET")
+	if secret == "" {
+		secret = os.Getenv("API_KEY_SECRET")
+	}
+	if secret == "" {
+		return "", fmt.Errorf("TWITTER_WEBHOOK_CONSUMER_SECRET or API_KEY_SECRET must be set")
+	}
+
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write(message)
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
@@ -220,6 +290,7 @@ func main() {
 	// Main server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.webhookHandler)
+	mux.HandleFunc("/twitter/webhook", s.twitterWebhookHandler)
 	mux.HandleFunc("/healthz", healthzHandler)
 
 	srv := &http.Server{
