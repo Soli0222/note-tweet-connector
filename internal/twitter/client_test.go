@@ -1,6 +1,23 @@
 package twitter
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
+
+func TestTweetBodyIncludesQuoteTweetID(t *testing.T) {
+	got := tweetBody("hello", []string{"media-1"}, "tweet-quote")
+	want := map[string]interface{}{
+		"text": "hello",
+		"media": map[string]interface{}{
+			"media_ids": []string{"media-1"},
+		},
+		"quote_tweet_id": "tweet-quote",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("tweetBody() = %#v, want %#v", got, want)
+	}
+}
 
 func TestMediaCategoryForType(t *testing.T) {
 	tests := []struct {

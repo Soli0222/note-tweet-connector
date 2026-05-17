@@ -15,11 +15,15 @@ import (
 )
 
 type IncomingTweet struct {
-	ID        string
-	Text      string
-	Username  string
-	URL       string
-	MediaURLs []string
+	ID             string
+	Text           string
+	UserID         string
+	Username       string
+	URL            string
+	MediaURLs      []string
+	QuotedTweetID  string
+	QuotedUserID   string
+	QuotedUsername string
 }
 
 type accountActivityPayload struct {
@@ -28,14 +32,16 @@ type accountActivityPayload struct {
 }
 
 type tweetObject struct {
-	IDStr            string          `json:"id_str"`
-	Text             string          `json:"text"`
-	FullText         string          `json:"full_text"`
-	Truncated        bool            `json:"truncated"`
-	User             twitterUser     `json:"user"`
-	Entities         twitterEntities `json:"entities"`
-	ExtendedEntities twitterEntities `json:"extended_entities"`
-	ExtendedTweet    extendedTweet   `json:"extended_tweet"`
+	IDStr             string          `json:"id_str"`
+	Text              string          `json:"text"`
+	FullText          string          `json:"full_text"`
+	Truncated         bool            `json:"truncated"`
+	User              twitterUser     `json:"user"`
+	Entities          twitterEntities `json:"entities"`
+	ExtendedEntities  twitterEntities `json:"extended_entities"`
+	ExtendedTweet     extendedTweet   `json:"extended_tweet"`
+	QuotedStatusIDStr string          `json:"quoted_status_id_str"`
+	QuotedStatus      *tweetObject    `json:"quoted_status"`
 }
 
 type extendedTweet struct {
@@ -63,6 +69,7 @@ type twitterUser struct {
 var rnAtPattern = regexp.MustCompile(`^RN\s*\[at\]`)
 
 var createMisskeyNoteWithFiles = misskey.CreateNoteWithFiles
+var createMisskeyNoteWithOptions = misskey.CreateNoteWithOptions
 var uploadMisskeyDriveFileFromURL = misskey.UploadDriveFileFromURL
 
 func Tweet2NoteHandler(ctx context.Context, data []byte, crossPostTracker *tracker.CrossPostTracker, m *metrics.Metrics) error {
@@ -100,6 +107,7 @@ func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, crossPostTrac
 	}
 
 	tweetText := tweet.Text
+	renoteID := ""
 
 	if rtAtPattern.MatchString(tweetText) {
 		tweetText = tweetText + "\n\n" + tweet.URL
@@ -112,6 +120,22 @@ func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, crossPostTrac
 			slog.String("text_preview", escapedText[:min(50, len(escapedText))]))
 		m.Tweet2NoteSkipped.WithLabelValues("rn_pattern").Inc()
 		return nil
+	}
+
+	if tweet.QuotedTweetID != "" {
+		if tweetQuoteSameAuthor(tweet) {
+			if resolvedNoteID, ok := resolveMisskeyNoteIDForTweet(crossPostTracker, tweet.QuotedTweetID); ok {
+				renoteID = resolvedNoteID
+			} else {
+				slog.Info("Quote tweet source not found in tracker",
+					slog.String("tweet_id", tweet.ID),
+					slog.String("quoted_tweet_id", tweet.QuotedTweetID))
+			}
+		} else {
+			slog.Info("Quote tweet author mismatch, falling back to text",
+				slog.String("tweet_id", tweet.ID),
+				slog.String("quoted_tweet_id", tweet.QuotedTweetID))
+		}
 	}
 
 	misskeyHost := os.Getenv("MISSKEY_HOST")
@@ -141,7 +165,11 @@ func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, crossPostTrac
 		fileIDs = append(fileIDs, fileID)
 	}
 
-	noteID, err := createMisskeyNoteWithFiles(ctx, misskeyHost, misskeyToken, tweetText, fileIDs)
+	noteID, err := createMisskeyNoteWithOptions(ctx, misskeyHost, misskeyToken, misskey.CreateNoteOptions{
+		Text:     tweetText,
+		FileIDs:  fileIDs,
+		RenoteID: renoteID,
+	})
 
 	if err == nil {
 		if noteID == "" {
@@ -155,6 +183,7 @@ func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, crossPostTrac
 			slog.String("note_id", noteID),
 			slog.String("text_preview", escapedText[:min(100, len(escapedText))]),
 			slog.String("tweet_url", tweet.URL),
+			slog.String("renote_id", renoteID),
 			slog.Bool("has_media", len(fileIDs) > 0),
 			slog.Int("media_count", len(fileIDs)))
 		m.Tweet2NoteSuccess.Inc()
@@ -190,16 +219,53 @@ func parseAccountActivityPayload(data []byte) ([]IncomingTweet, error) {
 		if username == "" {
 			username = os.Getenv("TWITTER_USERNAME")
 		}
+		quotedTweetID, quotedUserID, quotedUsername := quotedTweet(event)
 		tweets = append(tweets, IncomingTweet{
-			ID:        tweetID,
-			Text:      text,
-			Username:  username,
-			URL:       buildTweetURL(username, tweetID),
-			MediaURLs: mediaURLs,
+			ID:             tweetID,
+			Text:           text,
+			UserID:         event.User.IDStr,
+			Username:       username,
+			URL:            buildTweetURL(username, tweetID),
+			MediaURLs:      mediaURLs,
+			QuotedTweetID:  quotedTweetID,
+			QuotedUserID:   quotedUserID,
+			QuotedUsername: quotedUsername,
 		})
 	}
 
 	return tweets, nil
+}
+
+func quotedTweet(event tweetObject) (tweetID, userID, username string) {
+	if event.QuotedStatusIDStr != "" {
+		tweetID = event.QuotedStatusIDStr
+	}
+	if event.QuotedStatus != nil {
+		if tweetID == "" {
+			tweetID = event.QuotedStatus.IDStr
+		}
+		userID = event.QuotedStatus.User.IDStr
+		username = event.QuotedStatus.User.ScreenName
+	}
+	return tweetID, userID, username
+}
+
+func tweetQuoteSameAuthor(tweet IncomingTweet) bool {
+	if tweet.UserID != "" && tweet.QuotedUserID != "" {
+		return tweet.UserID == tweet.QuotedUserID
+	}
+	if tweet.Username != "" && tweet.QuotedUsername != "" {
+		return tweet.Username == tweet.QuotedUsername
+	}
+	return false
+}
+
+func resolveMisskeyNoteIDForTweet(crossPostTracker *tracker.CrossPostTracker, tweetID string) (string, bool) {
+	record, ok := crossPostTracker.FindByTweetID(tweetID)
+	if !ok || record.MisskeyNoteID == "" {
+		return "", false
+	}
+	return record.MisskeyNoteID, true
 }
 
 func tweetText(event tweetObject) string {

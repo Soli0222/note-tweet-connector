@@ -54,6 +54,48 @@ func TestCreateNoteWithFilesUsesBearerAuth(t *testing.T) {
 	}
 }
 
+func TestCreateNoteWithOptionsIncludesRenoteID(t *testing.T) {
+	var gotBody map[string]interface{}
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/notes/create" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("failed to decode body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"createdNote":{"id":"note-quote"}}`))
+	}))
+	defer server.Close()
+
+	oldClient := httpClient
+	httpClient = server.Client()
+	defer func() { httpClient = oldClient }()
+
+	host := strings.TrimPrefix(server.URL, "https://")
+	noteID, err := CreateNoteWithOptions(context.Background(), host, "test-token", CreateNoteOptions{
+		Text:     "quote text",
+		FileIDs:  []string{"file-1"},
+		RenoteID: "source-note",
+	})
+	if err != nil {
+		t.Fatalf("CreateNoteWithOptions() error = %v", err)
+	}
+	if noteID != "note-quote" {
+		t.Fatalf("noteID = %q, want note-quote", noteID)
+	}
+	if gotBody["text"] != "quote text" {
+		t.Fatalf("text = %#v", gotBody["text"])
+	}
+	if gotBody["renoteId"] != "source-note" {
+		t.Fatalf("renoteId = %#v, want source-note", gotBody["renoteId"])
+	}
+	fileIDs, ok := gotBody["fileIds"].([]interface{})
+	if !ok || len(fileIDs) != 1 || fileIDs[0] != "file-1" {
+		t.Fatalf("fileIds = %#v", gotBody["fileIds"])
+	}
+}
+
 func TestUploadDriveFileFromURL(t *testing.T) {
 	var gotAuth string
 	var gotFile string
