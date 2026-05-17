@@ -311,7 +311,7 @@ func twitterHMAC(message []byte, secret string) (string, error) {
 
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write([]byte("Webhook Test Server is healthy\nVersion: " + version)); err != nil {
+	if _, err := w.Write([]byte("ok\n")); err != nil {
 		slog.Error("Failed to write response", slog.Any("error", err))
 	}
 }

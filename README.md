@@ -111,6 +111,8 @@ docker compose up -d
 
 CrossPostTrackerのsqlite DBはコンテナ内の`/app/data/tracker.sqlite`に作成されます。`compose.yaml`では`./data:/app/data`をマウントしているため、コンテナを再作成してもTrackerの対応関係は保持されます。
 
+コンテナは非rootユーザー（UID `10001`）で実行されます。bind mountする`./data`は、このUIDから書き込める権限にしてください。
+
 ## Kubernetes
 
 Helm Chartは https://github.com/Soli0222/helm-charts で公開されています。
