@@ -68,7 +68,6 @@ type twitterUser struct {
 // RNとat記号の検出用正規表現
 var rnAtPattern = regexp.MustCompile(`^RN\s*\[at\]`)
 
-var createMisskeyNoteWithFiles = misskey.CreateNoteWithFiles
 var createMisskeyNoteWithOptions = misskey.CreateNoteWithOptions
 var uploadMisskeyDriveFileFromURL = misskey.UploadDriveFileFromURL
 
