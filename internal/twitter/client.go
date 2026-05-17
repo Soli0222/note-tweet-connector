@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	ManageTweetEndpoint = "https://api.twitter.com/2/tweets"
-	mediaChunkSize      = 4 * 1024 * 1024
-	maxMediaStatusPolls = 30
+	ManageTweetEndpoint       = "https://api.twitter.com/2/tweets"
+	mediaChunkSize            = 4 * 1024 * 1024
+	maxSimpleImageUploadBytes = 5 * 1024 * 1024
+	maxMediaStatusPolls       = 30
 )
 
 var UploadMediaEndpoint = "https://api.x.com/2/media/upload"
@@ -271,6 +272,10 @@ func uploadMediaFromURL(ctx context.Context, cfg Config, fileURL string) (string
 		return "", err
 	}
 
+	if shouldUseSimpleMediaUpload(mediaType, len(mediaBytes)) {
+		return simpleMediaUpload(ctx, tokenSource, mediaType, mediaCategory, mediaBytes)
+	}
+
 	mediaID, err := initMediaUpload(ctx, tokenSource, mediaType, mediaCategory, len(mediaBytes))
 	if err != nil {
 		return "", err
@@ -291,6 +296,28 @@ func uploadMediaFromURL(ctx context.Context, cfg Config, fileURL string) (string
 	}
 
 	return mediaID, nil
+}
+
+func shouldUseSimpleMediaUpload(mediaType string, totalBytes int) bool {
+	return strings.HasPrefix(mediaType, "image/") &&
+		!strings.HasPrefix(mediaType, "image/gif") &&
+		totalBytes <= maxSimpleImageUploadBytes
+}
+
+func simpleMediaUpload(ctx context.Context, tokenSource BearerTokenSource, mediaType, mediaCategory string, mediaBytes []byte) (string, error) {
+	fields := map[string]string{
+		"media_type":     mediaType,
+		"media_category": mediaCategory,
+	}
+
+	var uploadResponse UploadMediaResponse
+	if err := postMediaForm(ctx, tokenSource, fields, "media", mediaBytes, &uploadResponse); err != nil {
+		return "", err
+	}
+	if uploadResponse.Data.ID == "" {
+		return "", fmt.Errorf("media upload response did not include data.id")
+	}
+	return uploadResponse.Data.ID, nil
 }
 
 func initMediaUpload(ctx context.Context, tokenSource BearerTokenSource, mediaType, mediaCategory string, totalBytes int) (string, error) {

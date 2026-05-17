@@ -1,7 +1,12 @@
 package twitter
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -73,5 +78,81 @@ func TestValidateMediaURL(t *testing.T) {
 	}
 	if err := validateMediaURL("https://other.example/image.png", "media.example"); err == nil {
 		t.Fatal("validateMediaURL() expected host error")
+	}
+}
+
+func TestUploadMediaFromURLUsesSimpleUploadForImage(t *testing.T) {
+	ctx := context.Background()
+	var uploadCalled bool
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/image.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("png-data"))
+		case "/2/media/upload":
+			uploadCalled = true
+			if got := r.Header.Get("Authorization"); got != "Bearer token-1" {
+				t.Fatalf("Authorization = %q, want Bearer token-1", got)
+			}
+			if err := r.ParseMultipartForm(1024); err != nil {
+				t.Fatalf("ParseMultipartForm() error = %v", err)
+			}
+			if command := r.FormValue("command"); command != "" {
+				t.Fatalf("command = %q, want empty simple upload", command)
+			}
+			if mediaType := r.FormValue("media_type"); mediaType != "image/png" {
+				t.Fatalf("media_type = %q, want image/png", mediaType)
+			}
+			if mediaCategory := r.FormValue("media_category"); mediaCategory != "tweet_image" {
+				t.Fatalf("media_category = %q, want tweet_image", mediaCategory)
+			}
+			if _, _, err := r.FormFile("media"); err != nil {
+				t.Fatalf("FormFile(media) error = %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"id":"media-1"}}`))
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldClient := httpClient
+	httpClient = server.Client()
+	defer func() { httpClient = oldClient }()
+
+	oldEndpoint := UploadMediaEndpoint
+	UploadMediaEndpoint = server.URL + "/2/media/upload"
+	defer func() { UploadMediaEndpoint = oldEndpoint }()
+
+	mediaURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	mediaID, err := uploadMediaFromURL(ctx, Config{
+		BearerTokenSource: StaticBearerTokenSource{Token: "token-1"},
+		MisskeyMediaHost:  mediaURL.Host,
+	}, server.URL+"/image.png")
+	if err != nil {
+		t.Fatalf("uploadMediaFromURL() error = %v", err)
+	}
+	if mediaID != "media-1" {
+		t.Fatalf("mediaID = %q, want media-1", mediaID)
+	}
+	if !uploadCalled {
+		t.Fatal("upload endpoint was not called")
+	}
+}
+
+func TestMediaUploadForbiddenErrorIncludesUploadContext(t *testing.T) {
+	err := mediaUploadRequestError("INIT", http.StatusForbidden, []byte(`{"title":"Forbidden"}`))
+	if err == nil {
+		t.Fatal("mediaUploadRequestError() returned nil")
+	}
+	for _, want := range []string{"media upload INIT failed with status 403", "tweet.write", "Media API access"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("mediaUploadRequestError() = %q, want substring %q", err.Error(), want)
+		}
 	}
 }
