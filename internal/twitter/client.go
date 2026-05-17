@@ -48,6 +48,12 @@ type ProcessingInfo struct {
 	} `json:"error"`
 }
 
+type PostOptions struct {
+	Text         string
+	MediaURLs    []string
+	QuoteTweetID string
+}
+
 // validateMediaURL validates that the media URL is from an allowed host
 func validateMediaURL(fileURL string) error {
 	parsed, err := url.Parse(fileURL)
@@ -97,11 +103,15 @@ func loadTwitterUserAccessToken() (string, error) {
 
 // Post posts a tweet via Twitter API.
 func Post(ctx context.Context, text string) (string, error) {
-	return PostWithMedia(ctx, text, nil)
+	return PostWithOptions(ctx, PostOptions{Text: text})
 }
 
 // PostWithMedia posts a tweet with media attachments via Twitter API
 func PostWithMedia(ctx context.Context, text string, fileURLs []string) (string, error) {
+	return PostWithOptions(ctx, PostOptions{Text: text, MediaURLs: fileURLs})
+}
+
+func PostWithOptions(ctx context.Context, options PostOptions) (string, error) {
 	ak, aks, at, ats, err := loadTwitterEnv()
 	if err != nil {
 		slog.Error("Error loading Twitter API keys", slog.Any("error", err))
@@ -112,30 +122,38 @@ func PostWithMedia(ctx context.Context, text string, fileURLs []string) (string,
 	token := oauth1.NewToken(at, ats)
 	oauthClient := config.Client(ctx, token)
 
-	limit := len(fileURLs)
+	limit := len(options.MediaURLs)
 	if limit > 4 {
 		limit = 4
 	}
 
 	var mediaIDs []string
 	for i := 0; i < limit; i++ {
-		mediaID, err := uploadMediaFromURL(ctx, fileURLs[i])
+		mediaID, err := uploadMediaFromURL(ctx, options.MediaURLs[i])
 		if err != nil {
 			return "", err
 		}
 		mediaIDs = append(mediaIDs, mediaID)
 	}
 
-	return postTweet(ctx, oauthClient, text, mediaIDs)
+	return postTweet(ctx, oauthClient, options.Text, mediaIDs, options.QuoteTweetID)
 }
 
-func postTweet(ctx context.Context, oauthClient *http.Client, text string, mediaIDs []string) (string, error) {
+func tweetBody(text string, mediaIDs []string, quoteTweetID string) map[string]interface{} {
 	tweetBodyMap := map[string]interface{}{"text": text}
 	if len(mediaIDs) > 0 {
 		tweetBodyMap["media"] = map[string]interface{}{
 			"media_ids": mediaIDs,
 		}
 	}
+	if quoteTweetID != "" {
+		tweetBodyMap["quote_tweet_id"] = quoteTweetID
+	}
+	return tweetBodyMap
+}
+
+func postTweet(ctx context.Context, oauthClient *http.Client, text string, mediaIDs []string, quoteTweetID string) (string, error) {
+	tweetBodyMap := tweetBody(text, mediaIDs, quoteTweetID)
 	tweetBody, err := json.Marshal(tweetBodyMap)
 	if err != nil {
 		slog.Error("Error marshaling tweet data", slog.Any("error", err))

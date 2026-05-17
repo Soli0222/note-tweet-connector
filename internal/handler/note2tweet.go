@@ -18,22 +18,32 @@ var rtAtPattern = regexp.MustCompile(`^RT\s*@`)
 
 var postTweet = twitter.Post
 var postTweetWithMedia = twitter.PostWithMedia
+var postTweetWithOptions = twitter.PostWithOptions
 
 type payloadNoteData struct {
 	Server string `json:"server"`
 	Body   struct {
 		Note struct {
 			ID         string        `json:"id"`
+			UserID     string        `json:"userId"`
 			Visibility string        `json:"visibility"`
 			LocalOnly  bool          `json:"localOnly"`
 			Files      []interface{} `json:"files"`
 			Cw         string        `json:"cw"`
 			Text       string        `json:"text"`
-			Renote     struct {
-				ID   string `json:"id"`
-				URI  string `json:"uri"`
-				Text string `json:"text"`
-				User struct {
+			RenoteID   string        `json:"renoteId"`
+			User       struct {
+				ID       string `json:"id"`
+				Host     string `json:"host"`
+				Username string `json:"username"`
+			} `json:"user"`
+			Renote struct {
+				ID     string `json:"id"`
+				UserID string `json:"userId"`
+				URI    string `json:"uri"`
+				Text   string `json:"text"`
+				User   struct {
+					ID       string `json:"id"`
 					Host     string `json:"host"`
 					Username string `json:"username"`
 				}
@@ -85,10 +95,29 @@ func Note2TweetHandler(ctx context.Context, data []byte, crossPostTracker *track
 
 	noteText := payload.Body.Note.Text
 	noteURI := payload.Server + "/notes/" + payload.Body.Note.ID
+	quoteTweetID := ""
 
 	if payload.Body.Note.Cw != "" {
 		circles := strings.Repeat("○", len(payload.Body.Note.Text))
 		noteText = payload.Body.Note.Cw + "\n" + circles + "\n" + noteURI
+	} else if isQuoteRenote(payload) {
+		if noteRenoteSameAuthor(payload) {
+			renoteID := payload.Body.Note.RenoteID
+			if renoteID == "" {
+				renoteID = payload.Body.Note.Renote.ID
+			}
+			if resolvedTweetID, ok := resolveTweetIDForMisskeyNote(crossPostTracker, renoteID); ok {
+				quoteTweetID = resolvedTweetID
+			} else {
+				slog.Info("Quote renote source not found in tracker",
+					slog.String("note_id", noteID),
+					slog.String("renote_id", renoteID))
+			}
+		} else {
+			slog.Info("Quote renote author mismatch, falling back to text",
+				slog.String("note_id", noteID),
+				slog.String("renote_id", payload.Body.Note.RenoteID))
+		}
 	}
 
 	if noteText == "" || noteText == "null" {
@@ -125,7 +154,13 @@ func Note2TweetHandler(ctx context.Context, data []byte, crossPostTracker *track
 	}
 
 	var tweetID string
-	if len(fileURLs) == 0 {
+	if quoteTweetID != "" {
+		tweetID, err = postTweetWithOptions(ctx, twitter.PostOptions{
+			Text:         noteText,
+			MediaURLs:    fileURLs,
+			QuoteTweetID: quoteTweetID,
+		})
+	} else if len(fileURLs) == 0 {
 		tweetID, err = postTweet(ctx, noteText)
 	} else {
 		tweetID, err = postTweetWithMedia(ctx, noteText, fileURLs)
@@ -142,6 +177,7 @@ func Note2TweetHandler(ctx context.Context, data []byte, crossPostTracker *track
 			slog.String("note_id", noteID),
 			slog.String("tweet_id", tweetID),
 			slog.String("text_preview", escapedText[:min(100, len(escapedText))]),
+			slog.String("quote_tweet_id", quoteTweetID),
 			slog.Bool("has_media", len(fileURLs) > 0),
 			slog.Int("media_count", len(fileURLs)))
 		m.Note2TweetSuccess.Inc()
@@ -154,6 +190,31 @@ func Note2TweetHandler(ctx context.Context, data []byte, crossPostTracker *track
 	}
 
 	return nil
+}
+
+func isQuoteRenote(payload *payloadNoteData) bool {
+	if payload.Body.Note.Text == "" || payload.Body.Note.Text == "null" {
+		return false
+	}
+	return payload.Body.Note.RenoteID != "" || payload.Body.Note.Renote.ID != ""
+}
+
+func noteRenoteSameAuthor(payload *payloadNoteData) bool {
+	if payload.Body.Note.UserID != "" && payload.Body.Note.Renote.UserID != "" {
+		return payload.Body.Note.UserID == payload.Body.Note.Renote.UserID
+	}
+	if payload.Body.Note.User.ID != "" && payload.Body.Note.Renote.User.ID != "" {
+		return payload.Body.Note.User.ID == payload.Body.Note.Renote.User.ID
+	}
+	return false
+}
+
+func resolveTweetIDForMisskeyNote(crossPostTracker *tracker.CrossPostTracker, noteID string) (string, bool) {
+	record, ok := crossPostTracker.FindByMisskeyNoteID(noteID)
+	if !ok || record.TweetID == "" {
+		return "", false
+	}
+	return record.TweetID, true
 }
 
 func parseNotePayload(data []byte) (*payloadNoteData, error) {

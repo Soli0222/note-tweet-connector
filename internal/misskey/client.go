@@ -21,21 +21,34 @@ var httpClient = &http.Client{
 	Timeout: 30 * time.Second,
 }
 
+type CreateNoteOptions struct {
+	Text     string
+	FileIDs  []string
+	RenoteID string
+}
+
 // CreateNote creates a new note on Misskey
 func CreateNote(ctx context.Context, host, token, text string) (string, error) {
-	return CreateNoteWithFiles(ctx, host, token, text, nil)
+	return CreateNoteWithOptions(ctx, host, token, CreateNoteOptions{Text: text})
 }
 
 // CreateNoteWithFiles creates a new note on Misskey with optional file attachments.
 func CreateNoteWithFiles(ctx context.Context, host, token, text string, fileIDs []string) (string, error) {
+	return CreateNoteWithOptions(ctx, host, token, CreateNoteOptions{Text: text, FileIDs: fileIDs})
+}
+
+func CreateNoteWithOptions(ctx context.Context, host, token string, options CreateNoteOptions) (string, error) {
 	endpoint := "https://" + host + "/api/notes/create"
 
 	jsonData := map[string]interface{}{}
-	if text != "" {
-		jsonData["text"] = text
+	if options.Text != "" {
+		jsonData["text"] = options.Text
 	}
-	if len(fileIDs) > 0 {
-		jsonData["fileIds"] = fileIDs
+	if len(options.FileIDs) > 0 {
+		jsonData["fileIds"] = options.FileIDs
+	}
+	if options.RenoteID != "" {
+		jsonData["renoteId"] = options.RenoteID
 	}
 
 	jsonBytes, err := json.Marshal(jsonData)

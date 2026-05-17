@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Soli0222/note-tweet-connector/internal/metrics"
+	"github.com/Soli0222/note-tweet-connector/internal/misskey"
 	"github.com/Soli0222/note-tweet-connector/internal/tracker"
 )
 
@@ -243,6 +244,45 @@ func TestParseAccountActivityPayload(t *testing.T) {
 			},
 		},
 		{
+			name: "extract quote tweet metadata",
+			payload: `{
+				"for_user_id": "111",
+				"tweet_create_events": [
+					{
+						"id_str": "123456789",
+						"text": "quote text https://t.co/source",
+						"user": {
+							"id_str": "111",
+							"screen_name": "dummy_user"
+						},
+						"quoted_status_id_str": "987654321",
+						"quoted_status": {
+							"id_str": "987654321",
+							"text": "source text",
+							"user": {
+								"id_str": "111",
+								"screen_name": "dummy_user"
+							}
+						}
+					}
+				]
+			}`,
+			check: func(t *testing.T, tweets []IncomingTweet) {
+				if len(tweets) != 1 {
+					t.Fatalf("expected 1 tweet, got %d", len(tweets))
+				}
+				if tweets[0].QuotedTweetID != "987654321" {
+					t.Fatalf("QuotedTweetID = %q, want 987654321", tweets[0].QuotedTweetID)
+				}
+				if tweets[0].QuotedUserID != "111" {
+					t.Fatalf("QuotedUserID = %q, want 111", tweets[0].QuotedUserID)
+				}
+				if tweets[0].QuotedUsername != "dummy_user" {
+					t.Fatalf("QuotedUsername = %q, want dummy_user", tweets[0].QuotedUsername)
+				}
+			},
+		},
+		{
 			name:    "invalid JSON",
 			payload: `{invalid json}`,
 			wantErr: true,
@@ -280,10 +320,10 @@ func TestHandleIncomingTweet_WithMedia(t *testing.T) {
 	t.Setenv("MISSKEY_HOST", "misskey.example")
 	t.Setenv("MISSKEY_TOKEN", "test-token")
 
-	oldCreate := createMisskeyNoteWithFiles
+	oldCreate := createMisskeyNoteWithOptions
 	oldUpload := uploadMisskeyDriveFileFromURL
 	defer func() {
-		createMisskeyNoteWithFiles = oldCreate
+		createMisskeyNoteWithOptions = oldCreate
 		uploadMisskeyDriveFileFromURL = oldUpload
 	}()
 
@@ -298,12 +338,12 @@ func TestHandleIncomingTweet_WithMedia(t *testing.T) {
 
 	var gotText string
 	var gotFileIDs []string
-	createMisskeyNoteWithFiles = func(ctx context.Context, host, token, text string, fileIDs []string) (string, error) {
+	createMisskeyNoteWithOptions = func(ctx context.Context, host, token string, options misskey.CreateNoteOptions) (string, error) {
 		if host != "misskey.example" || token != "test-token" {
 			t.Fatalf("unexpected create auth host=%q token=%q", host, token)
 		}
-		gotText = text
-		gotFileIDs = append([]string(nil), fileIDs...)
+		gotText = options.Text
+		gotFileIDs = append([]string(nil), options.FileIDs...)
 		return "note-123", nil
 	}
 
@@ -333,6 +373,91 @@ func TestHandleIncomingTweet_WithMedia(t *testing.T) {
 	}
 	if !crossPostTracker.HasMisskeyNote("note-123") {
 		t.Fatal("note ID was not recorded")
+	}
+}
+
+func TestHandleIncomingTweet_QuoteTweetUsesTrackerNoteID(t *testing.T) {
+	ctx := context.Background()
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
+	crossPostTracker.RememberMisskeyToTweet("source-note", "source-tweet")
+	m := metrics.NewNoop()
+
+	t.Setenv("MISSKEY_HOST", "misskey.example")
+	t.Setenv("MISSKEY_TOKEN", "test-token")
+
+	oldCreate := createMisskeyNoteWithOptions
+	defer func() { createMisskeyNoteWithOptions = oldCreate }()
+
+	var gotOptions misskey.CreateNoteOptions
+	createMisskeyNoteWithOptions = func(ctx context.Context, host, token string, options misskey.CreateNoteOptions) (string, error) {
+		if host != "misskey.example" || token != "test-token" {
+			t.Fatalf("unexpected create auth host=%q token=%q", host, token)
+		}
+		gotOptions = options
+		return "quote-note", nil
+	}
+
+	tweet := IncomingTweet{
+		ID:             "quote-tweet",
+		Text:           "my quote text https://t.co/source",
+		UserID:         "user-1",
+		Username:       "dummy_user",
+		URL:            "https://twitter.com/dummy_user/status/quote-tweet",
+		QuotedTweetID:  "source-tweet",
+		QuotedUserID:   "user-1",
+		QuotedUsername: "dummy_user",
+	}
+
+	if err := HandleIncomingTweet(ctx, tweet, crossPostTracker, m); err != nil {
+		t.Fatalf("HandleIncomingTweet() error = %v", err)
+	}
+	if gotOptions.Text != tweet.Text {
+		t.Fatalf("Text = %q, want %q", gotOptions.Text, tweet.Text)
+	}
+	if gotOptions.RenoteID != "source-note" {
+		t.Fatalf("RenoteID = %q, want source-note", gotOptions.RenoteID)
+	}
+	if !crossPostTracker.HasTweet("quote-tweet") || !crossPostTracker.HasMisskeyNote("quote-note") {
+		t.Fatal("quote cross-post IDs were not recorded")
+	}
+}
+
+func TestHandleIncomingTweet_QuoteTweetFallsBackWhenTrackerMiss(t *testing.T) {
+	ctx := context.Background()
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
+	m := metrics.NewNoop()
+
+	t.Setenv("MISSKEY_HOST", "misskey.example")
+	t.Setenv("MISSKEY_TOKEN", "test-token")
+
+	oldCreate := createMisskeyNoteWithOptions
+	defer func() { createMisskeyNoteWithOptions = oldCreate }()
+
+	var gotOptions misskey.CreateNoteOptions
+	createMisskeyNoteWithOptions = func(ctx context.Context, host, token string, options misskey.CreateNoteOptions) (string, error) {
+		gotOptions = options
+		return "fallback-note", nil
+	}
+
+	tweet := IncomingTweet{
+		ID:             "quote-tweet",
+		Text:           "my quote text https://t.co/source",
+		UserID:         "user-1",
+		Username:       "dummy_user",
+		URL:            "https://twitter.com/dummy_user/status/quote-tweet",
+		QuotedTweetID:  "missing-source-tweet",
+		QuotedUserID:   "user-1",
+		QuotedUsername: "dummy_user",
+	}
+
+	if err := HandleIncomingTweet(ctx, tweet, crossPostTracker, m); err != nil {
+		t.Fatalf("HandleIncomingTweet() error = %v", err)
+	}
+	if gotOptions.RenoteID != "" {
+		t.Fatalf("RenoteID = %q, want empty fallback", gotOptions.RenoteID)
+	}
+	if gotOptions.Text != tweet.Text {
+		t.Fatalf("Text = %q, want %q", gotOptions.Text, tweet.Text)
 	}
 }
 
@@ -402,10 +527,10 @@ func TestTweet2NoteHandler_SkipsMissingTweetID(t *testing.T) {
 	t.Setenv("MISSKEY_HOST", "misskey.example")
 	t.Setenv("MISSKEY_TOKEN", "test-token")
 
-	oldCreate := createMisskeyNoteWithFiles
-	defer func() { createMisskeyNoteWithFiles = oldCreate }()
-	createMisskeyNoteWithFiles = func(ctx context.Context, host, token, text string, fileIDs []string) (string, error) {
-		t.Fatal("CreateNoteWithFiles should not be called when tweet ID is missing")
+	oldCreate := createMisskeyNoteWithOptions
+	defer func() { createMisskeyNoteWithOptions = oldCreate }()
+	createMisskeyNoteWithOptions = func(ctx context.Context, host, token string, options misskey.CreateNoteOptions) (string, error) {
+		t.Fatal("CreateNoteWithOptions should not be called when tweet ID is missing")
 		return "", nil
 	}
 

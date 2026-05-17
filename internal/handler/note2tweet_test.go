@@ -8,6 +8,7 @@ import (
 
 	"github.com/Soli0222/note-tweet-connector/internal/metrics"
 	"github.com/Soli0222/note-tweet-connector/internal/tracker"
+	"github.com/Soli0222/note-tweet-connector/internal/twitter"
 )
 
 func TestParseNotePayload(t *testing.T) {
@@ -365,6 +366,139 @@ func TestNote2TweetHandler_RecordsCrossPostIDs(t *testing.T) {
 	}
 	if !crossPostTracker.HasTweet("tweet-1") {
 		t.Fatal("tweet ID was not recorded")
+	}
+}
+
+func TestNote2TweetHandler_QuoteRenoteUsesTrackerTweetID(t *testing.T) {
+	ctx := context.Background()
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
+	crossPostTracker.RememberMisskeyToTweet("source-note", "source-tweet")
+	m := metrics.NewNoop()
+
+	oldPost := postTweet
+	oldPostWithMedia := postTweetWithMedia
+	oldPostWithOptions := postTweetWithOptions
+	defer func() {
+		postTweet = oldPost
+		postTweetWithMedia = oldPostWithMedia
+		postTweetWithOptions = oldPostWithOptions
+	}()
+
+	postTweet = func(ctx context.Context, text string) (string, error) {
+		t.Fatal("Post should not be called for quote renote")
+		return "", nil
+	}
+	postTweetWithMedia = func(ctx context.Context, text string, fileURLs []string) (string, error) {
+		t.Fatal("PostWithMedia should not be called for quote renote")
+		return "", nil
+	}
+
+	var gotOptions twitter.PostOptions
+	postTweetWithOptions = func(ctx context.Context, options twitter.PostOptions) (string, error) {
+		gotOptions = options
+		return "quote-tweet", nil
+	}
+
+	payload := `{
+		"body": {
+			"note": {
+				"id": "quote-note",
+				"userId": "user-1",
+				"text": "My quote text",
+				"visibility": "public",
+				"localOnly": false,
+				"files": [],
+				"cw": null,
+				"renoteId": "source-note",
+				"renote": {
+					"id": "source-note",
+					"userId": "user-1",
+					"text": "source text",
+					"uri": "https://misskey.example/notes/source-note",
+					"user": {
+						"id": "user-1",
+						"username": "dummy"
+					}
+				},
+				"user": {
+					"id": "user-1",
+					"username": "dummy"
+				}
+			}
+		},
+		"server": "https://misskey.example"
+	}`
+
+	if err := Note2TweetHandler(ctx, []byte(payload), crossPostTracker, m); err != nil {
+		t.Fatalf("Note2TweetHandler() error = %v", err)
+	}
+	if gotOptions.Text != "My quote text" {
+		t.Fatalf("Text = %q, want My quote text", gotOptions.Text)
+	}
+	if gotOptions.QuoteTweetID != "source-tweet" {
+		t.Fatalf("QuoteTweetID = %q, want source-tweet", gotOptions.QuoteTweetID)
+	}
+	if !crossPostTracker.HasMisskeyNote("quote-note") || !crossPostTracker.HasTweet("quote-tweet") {
+		t.Fatal("quote cross-post IDs were not recorded")
+	}
+}
+
+func TestNote2TweetHandler_QuoteRenoteFallsBackWhenTrackerMiss(t *testing.T) {
+	ctx := context.Background()
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
+	m := metrics.NewNoop()
+
+	oldPost := postTweet
+	oldPostWithOptions := postTweetWithOptions
+	defer func() {
+		postTweet = oldPost
+		postTweetWithOptions = oldPostWithOptions
+	}()
+
+	var gotText string
+	postTweet = func(ctx context.Context, text string) (string, error) {
+		gotText = text
+		return "tweet-fallback", nil
+	}
+	postTweetWithOptions = func(ctx context.Context, options twitter.PostOptions) (string, error) {
+		t.Fatal("PostWithOptions should not be called when quote source is not in tracker")
+		return "", nil
+	}
+
+	payload := `{
+		"body": {
+			"note": {
+				"id": "quote-note",
+				"userId": "user-1",
+				"text": "My quote text",
+				"visibility": "public",
+				"localOnly": false,
+				"files": [],
+				"cw": null,
+				"renoteId": "missing-source-note",
+				"renote": {
+					"id": "missing-source-note",
+					"userId": "user-1",
+					"text": "source text",
+					"user": {
+						"id": "user-1",
+						"username": "dummy"
+					}
+				},
+				"user": {
+					"id": "user-1",
+					"username": "dummy"
+				}
+			}
+		},
+		"server": "https://misskey.example"
+	}`
+
+	if err := Note2TweetHandler(ctx, []byte(payload), crossPostTracker, m); err != nil {
+		t.Fatalf("Note2TweetHandler() error = %v", err)
+	}
+	if gotText != "My quote text" {
+		t.Fatalf("posted text = %q, want My quote text", gotText)
 	}
 }
 
