@@ -297,7 +297,9 @@ func TestNote2TweetHandler_KnownCrossPostDetection(t *testing.T) {
 	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
-	crossPostTracker.RememberTweetToMisskey("tweet-2", "note-2")
+	if err := crossPostTracker.RememberTweetToMisskey(ctx, "tweet-2", "note-2"); err != nil {
+		t.Fatalf("RememberTweetToMisskey() error = %v", err)
+	}
 
 	payload := `{
 		"body": {
@@ -361,10 +363,10 @@ func TestNote2TweetHandler_RecordsCrossPostIDs(t *testing.T) {
 	if gotText != "Public note" {
 		t.Fatalf("posted text = %q, want Public note", gotText)
 	}
-	if !crossPostTracker.HasMisskeyNote("note-1") {
+	if ok, err := crossPostTracker.HasMisskeyNote(ctx, "note-1"); err != nil || !ok {
 		t.Fatal("note ID was not recorded")
 	}
-	if !crossPostTracker.HasTweet("tweet-1") {
+	if ok, err := crossPostTracker.HasTweet(ctx, "tweet-1"); err != nil || !ok {
 		t.Fatal("tweet ID was not recorded")
 	}
 }
@@ -372,7 +374,9 @@ func TestNote2TweetHandler_RecordsCrossPostIDs(t *testing.T) {
 func TestNote2TweetHandler_QuoteRenoteUsesTrackerTweetID(t *testing.T) {
 	ctx := context.Background()
 	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
-	crossPostTracker.RememberMisskeyToTweet("source-note", "source-tweet")
+	if err := crossPostTracker.RememberMisskeyToTweet(ctx, "source-note", "source-tweet"); err != nil {
+		t.Fatalf("RememberMisskeyToTweet() error = %v", err)
+	}
 	m := metrics.NewNoop()
 
 	oldPost := postTweet
@@ -438,7 +442,15 @@ func TestNote2TweetHandler_QuoteRenoteUsesTrackerTweetID(t *testing.T) {
 	if gotOptions.QuoteTweetID != "source-tweet" {
 		t.Fatalf("QuoteTweetID = %q, want source-tweet", gotOptions.QuoteTweetID)
 	}
-	if !crossPostTracker.HasMisskeyNote("quote-note") || !crossPostTracker.HasTweet("quote-tweet") {
+	hasNote, err := crossPostTracker.HasMisskeyNote(ctx, "quote-note")
+	if err != nil {
+		t.Fatalf("HasMisskeyNote() error = %v", err)
+	}
+	hasTweet, err := crossPostTracker.HasTweet(ctx, "quote-tweet")
+	if err != nil {
+		t.Fatalf("HasTweet() error = %v", err)
+	}
+	if !hasNote || !hasTweet {
 		t.Fatal("quote cross-post IDs were not recorded")
 	}
 }

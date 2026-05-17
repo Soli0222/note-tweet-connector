@@ -71,7 +71,7 @@ var rnAtPattern = regexp.MustCompile(`^RN\s*\[at\]`)
 var createMisskeyNoteWithOptions = misskey.CreateNoteWithOptions
 var uploadMisskeyDriveFileFromURL = misskey.UploadDriveFileFromURL
 
-func Tweet2NoteHandler(ctx context.Context, data []byte, crossPostTracker *tracker.CrossPostTracker, m *metrics.Metrics) error {
+func Tweet2NoteHandler(ctx context.Context, data []byte, crossPostTracker tracker.CrossPostTracker, m *metrics.Metrics) error {
 	m.Tweet2NoteTotal.Inc()
 
 	tweets, err := parseAccountActivityPayload(data)
@@ -90,14 +90,22 @@ func Tweet2NoteHandler(ctx context.Context, data []byte, crossPostTracker *track
 	return nil
 }
 
-func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, crossPostTracker *tracker.CrossPostTracker, m *metrics.Metrics) error {
+func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, crossPostTracker tracker.CrossPostTracker, m *metrics.Metrics) error {
 	if tweet.ID == "" {
 		slog.Warn("Tweet ID is missing, skipping")
 		m.Tweet2NoteSkipped.WithLabelValues("missing_id").Inc()
 		return nil
 	}
 
-	if crossPostTracker.HasTweet(tweet.ID) {
+	tracked, err := crossPostTracker.HasTweet(ctx, tweet.ID)
+	if err != nil {
+		slog.Error("Failed to check cross-post tracker",
+			slog.String("tweet_id", tweet.ID),
+			slog.Any("error", err))
+		m.Tweet2NoteErrors.Inc()
+		return err
+	}
+	if tracked {
 		slog.Info("Known cross-posted tweet, skipping",
 			slog.String("tweet_id", tweet.ID))
 		m.Tweet2NoteSkipped.WithLabelValues("crosspost").Inc()
@@ -123,7 +131,16 @@ func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, crossPostTrac
 
 	if tweet.QuotedTweetID != "" {
 		if tweetQuoteSameAuthor(tweet) {
-			if resolvedNoteID, ok := resolveMisskeyNoteIDForTweet(crossPostTracker, tweet.QuotedTweetID); ok {
+			resolvedNoteID, ok, err := resolveMisskeyNoteIDForTweet(ctx, crossPostTracker, tweet.QuotedTweetID)
+			if err != nil {
+				slog.Error("Failed to resolve quote tweet source from tracker",
+					slog.String("tweet_id", tweet.ID),
+					slog.String("quoted_tweet_id", tweet.QuotedTweetID),
+					slog.Any("error", err))
+				m.Tweet2NoteErrors.Inc()
+				return err
+			}
+			if ok {
 				renoteID = resolvedNoteID
 			} else {
 				slog.Info("Quote tweet source not found in tracker",
@@ -175,7 +192,14 @@ func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, crossPostTrac
 			m.Tweet2NoteErrors.Inc()
 			return errMissingPostedID("misskey note")
 		}
-		crossPostTracker.RememberTweetToMisskey(tweet.ID, noteID)
+		if err := crossPostTracker.RememberTweetToMisskey(ctx, tweet.ID, noteID); err != nil {
+			slog.Error("Posted note but failed to record cross-post",
+				slog.String("tweet_id", tweet.ID),
+				slog.String("note_id", noteID),
+				slog.Any("error", err))
+			m.Tweet2NoteErrors.Inc()
+			return err
+		}
 		escapedText := strings.ReplaceAll(tweetText, "\n", "\\n")
 		slog.Info("Successfully forwarded tweet to note",
 			slog.String("tweet_id", tweet.ID),
@@ -259,12 +283,15 @@ func tweetQuoteSameAuthor(tweet IncomingTweet) bool {
 	return false
 }
 
-func resolveMisskeyNoteIDForTweet(crossPostTracker *tracker.CrossPostTracker, tweetID string) (string, bool) {
-	record, ok := crossPostTracker.FindByTweetID(tweetID)
-	if !ok || record.MisskeyNoteID == "" {
-		return "", false
+func resolveMisskeyNoteIDForTweet(ctx context.Context, crossPostTracker tracker.CrossPostTracker, tweetID string) (string, bool, error) {
+	record, ok, err := crossPostTracker.FindByTweetID(ctx, tweetID)
+	if err != nil {
+		return "", false, err
 	}
-	return record.MisskeyNoteID, true
+	if !ok || record.MisskeyNoteID == "" {
+		return "", false, nil
+	}
+	return record.MisskeyNoteID, true, nil
 }
 
 func tweetText(event tweetObject) string {
