@@ -92,6 +92,11 @@ func Tweet2NoteHandlerWithConfig(ctx context.Context, cfg Config, data []byte, c
 		m.Tweet2NoteErrors.Inc()
 		return err
 	}
+	if len(tweets) == 0 {
+		slog.Warn("No eligible tweet_create_events in Twitter webhook payload")
+		m.Tweet2NoteSkipped.WithLabelValues("no_eligible_tweets").Inc()
+		return nil
+	}
 
 	for _, tweet := range tweets {
 		if err := HandleIncomingTweetWithConfig(ctx, cfg, tweet, crossPostTracker, m); err != nil {

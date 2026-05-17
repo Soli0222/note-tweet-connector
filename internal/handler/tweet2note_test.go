@@ -9,6 +9,7 @@ import (
 	"github.com/Soli0222/note-tweet-connector/internal/metrics"
 	"github.com/Soli0222/note-tweet-connector/internal/misskey"
 	"github.com/Soli0222/note-tweet-connector/internal/tracker"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func testHandlerConfig() Config {
@@ -525,6 +526,25 @@ func TestTweet2NoteHandler_KnownCrossPostDetection(t *testing.T) {
 	err := Tweet2NoteHandlerWithConfig(ctx, testHandlerConfig(), []byte(payload), crossPostTracker, m)
 	if err != nil {
 		t.Errorf("Tweet2NoteHandler() should not return error for known cross-post, got %v", err)
+	}
+}
+
+func TestTweet2NoteHandler_NoEligibleTweets(t *testing.T) {
+	ctx := context.Background()
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
+	m := metrics.NewNoop()
+
+	payload := `{
+		"for_user_id": "111",
+		"tweet_create_events": []
+	}`
+
+	err := Tweet2NoteHandlerWithConfig(ctx, testHandlerConfig(), []byte(payload), crossPostTracker, m)
+	if err != nil {
+		t.Fatalf("Tweet2NoteHandler() error = %v", err)
+	}
+	if got := testutil.ToFloat64(m.Tweet2NoteSkipped.WithLabelValues("no_eligible_tweets")); got != 1 {
+		t.Fatalf("no_eligible_tweets skipped metric = %v, want 1", got)
 	}
 }
 

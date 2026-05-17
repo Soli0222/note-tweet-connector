@@ -187,6 +187,7 @@ curl --request GET \
 
 - `POST /twitter/webhook`にTwitter Account Activity payloadを受け付けます。
 - `x-twitter-webhooks-signature`を`-twitter-webhook-consumer-secret`で検証します。
+- Twitter webhookのPOSTを受信した時点でログを出し、転送対象の`tweet_create_events`がないpayloadもログと`tweet2note_skipped_total{reason="no_eligible_tweets"}`で記録します。
 - CrossPostTrackerに登録済みのtweetはスキップします。
 - `RN [at]`で始まるtweetは転送ループ抑止のためスキップします。
 - `RT @`で始まるtweetは元tweet URLを本文末尾に追記します。
