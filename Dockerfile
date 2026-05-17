@@ -18,6 +18,13 @@ WORKDIR /app
 
 COPY --from=builder /app/note-tweet-connector .
 
+RUN addgroup -S app && \
+    adduser -S -D -H -u 10001 -G app app && \
+    mkdir -p /app/data && \
+    chown -R app:app /app
+
+USER app
+
 EXPOSE 8080 9090
 
 ENTRYPOINT ["./note-tweet-connector"]
