@@ -2,6 +2,8 @@ package twitter
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -94,20 +96,25 @@ func TestUploadMediaFromURLUsesSimpleUploadForImage(t *testing.T) {
 			if got := r.Header.Get("Authorization"); got != "Bearer token-1" {
 				t.Fatalf("Authorization = %q, want Bearer token-1", got)
 			}
-			if err := r.ParseMultipartForm(1024); err != nil {
-				t.Fatalf("ParseMultipartForm() error = %v", err)
+			if got := r.Header.Get("Content-Type"); got != "application/json" {
+				t.Fatalf("Content-Type = %q, want application/json", got)
 			}
-			if command := r.FormValue("command"); command != "" {
-				t.Fatalf("command = %q, want empty simple upload", command)
+			var body struct {
+				Media         string `json:"media"`
+				MediaType     string `json:"media_type"`
+				MediaCategory string `json:"media_category"`
 			}
-			if mediaType := r.FormValue("media_type"); mediaType != "image/png" {
-				t.Fatalf("media_type = %q, want image/png", mediaType)
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("Decode() error = %v", err)
 			}
-			if mediaCategory := r.FormValue("media_category"); mediaCategory != "tweet_image" {
-				t.Fatalf("media_category = %q, want tweet_image", mediaCategory)
+			if body.Media != base64.StdEncoding.EncodeToString([]byte("png-data")) {
+				t.Fatalf("media = %q, want base64 png-data", body.Media)
 			}
-			if _, _, err := r.FormFile("media"); err != nil {
-				t.Fatalf("FormFile(media) error = %v", err)
+			if body.MediaType != "image/png" {
+				t.Fatalf("media_type = %q, want image/png", body.MediaType)
+			}
+			if body.MediaCategory != "tweet_image" {
+				t.Fatalf("media_category = %q, want tweet_image", body.MediaCategory)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"data":{"id":"media-1"}}`))
@@ -150,7 +157,7 @@ func TestMediaUploadForbiddenErrorIncludesUploadContext(t *testing.T) {
 	if err == nil {
 		t.Fatal("mediaUploadRequestError() returned nil")
 	}
-	for _, want := range []string{"media upload INIT failed with status 403", "tweet.write", "Media API access"} {
+	for _, want := range []string{"media upload INIT failed with status 403", "media.write", "tweet.write", "Media API access"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("mediaUploadRequestError() = %q, want substring %q", err.Error(), want)
 		}

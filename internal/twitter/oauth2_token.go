@@ -2,8 +2,8 @@ package twitter
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +19,8 @@ import (
 const tokenRefreshLeeway = 5 * time.Minute
 
 var OAuth2TokenEndpoint = "https://api.x.com/2/oauth2/token"
+
+var ErrAuthorizationRequired = errors.New("twitter OAuth 2.0 authorization required")
 
 type BearerTokenSource interface {
 	BearerToken(ctx context.Context) (string, error)
@@ -42,9 +44,7 @@ func (s StaticBearerTokenSource) BearerToken(ctx context.Context) (string, error
 
 type OAuth2Config struct {
 	ClientID       string
-	ClientSecret   string
-	AccessToken    string
-	RefreshToken   string
+	RedirectURL    string
 	TokenStorePath string
 }
 
@@ -63,22 +63,42 @@ type TokenManager struct {
 	token      OAuth2Token
 }
 
+type AuthorizationRequiredError struct {
+	Reason string
+	Err    error
+}
+
+func (e *AuthorizationRequiredError) Error() string {
+	if e.Reason == "" {
+		return ErrAuthorizationRequired.Error()
+	}
+	if e.Err != nil {
+		return ErrAuthorizationRequired.Error() + ": " + e.Reason + ": " + e.Err.Error()
+	}
+	return ErrAuthorizationRequired.Error() + ": " + e.Reason
+}
+
+func (e *AuthorizationRequiredError) Unwrap() error {
+	return e.Err
+}
+
+func (e *AuthorizationRequiredError) Is(target error) bool {
+	return target == ErrAuthorizationRequired
+}
+
+func authorizationRequired(reason string, err error) error {
+	return &AuthorizationRequiredError{Reason: reason, Err: err}
+}
+
 func NewTokenManager(cfg OAuth2Config) (*TokenManager, error) {
 	if cfg.ClientID == "" {
 		return nil, fmt.Errorf("twitter OAuth 2.0 client id is not configured")
-	}
-	if cfg.RefreshToken == "" {
-		return nil, fmt.Errorf("twitter OAuth 2.0 refresh token is not configured")
 	}
 
 	m := &TokenManager{
 		cfg:        cfg,
 		httpClient: httpClient,
-		token: OAuth2Token{
-			AccessToken:  cfg.AccessToken,
-			RefreshToken: cfg.RefreshToken,
-			TokenType:    "bearer",
-		},
+		token:      OAuth2Token{TokenType: "bearer"},
 	}
 
 	if cfg.TokenStorePath != "" {
@@ -88,9 +108,6 @@ func NewTokenManager(cfg OAuth2Config) (*TokenManager, error) {
 		}
 		if ok {
 			m.token = token
-			if m.token.RefreshToken == "" {
-				m.token.RefreshToken = cfg.RefreshToken
-			}
 		}
 	}
 
@@ -108,6 +125,16 @@ func (m *TokenManager) BearerToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return m.token.AccessToken, nil
+}
+
+func (m *TokenManager) AuthorizationRequired() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.token.AccessToken != "" && !m.shouldRefreshLocked(time.Now()) {
+		return false
+	}
+	return m.token.RefreshToken == ""
 }
 
 func (m *TokenManager) Refresh(ctx context.Context) error {
@@ -129,10 +156,7 @@ func (m *TokenManager) shouldRefreshLocked(now time.Time) bool {
 func (m *TokenManager) refreshLocked(ctx context.Context) error {
 	refreshToken := m.token.RefreshToken
 	if refreshToken == "" {
-		refreshToken = m.cfg.RefreshToken
-	}
-	if refreshToken == "" {
-		return fmt.Errorf("twitter OAuth 2.0 refresh token is not configured")
+		return authorizationRequired("refresh token is not available", nil)
 	}
 
 	values := url.Values{}
@@ -145,10 +169,6 @@ func (m *TokenManager) refreshLocked(ctx context.Context) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if m.cfg.ClientSecret != "" {
-		credential := base64.StdEncoding.EncodeToString([]byte(m.cfg.ClientID + ":" + m.cfg.ClientSecret))
-		req.Header.Set("Authorization", "Basic "+credential)
-	}
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -161,8 +181,8 @@ func (m *TokenManager) refreshLocked(ctx context.Context) error {
 		return err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		preview := previewBody(respBytes, refreshToken, m.cfg.RefreshToken, m.cfg.AccessToken, m.token.AccessToken)
-		return fmt.Errorf("twitter OAuth 2.0 token refresh failed with status %d: %s", resp.StatusCode, preview)
+		preview := previewBody(respBytes, refreshToken, m.token.AccessToken)
+		return authorizationRequired("token refresh failed", fmt.Errorf("status %d: %s", resp.StatusCode, preview))
 	}
 
 	var refreshResp struct {
@@ -176,20 +196,96 @@ func (m *TokenManager) refreshLocked(ctx context.Context) error {
 		return fmt.Errorf("failed to parse twitter OAuth 2.0 token response: %w", err)
 	}
 	if refreshResp.AccessToken == "" {
-		return fmt.Errorf("twitter OAuth 2.0 token response did not include access token")
+		return authorizationRequired("token refresh response did not include access token", nil)
 	}
 
-	m.token.AccessToken = refreshResp.AccessToken
-	if refreshResp.RefreshToken != "" {
-		m.token.RefreshToken = refreshResp.RefreshToken
+	if err := m.storeTokenResponseLocked(refreshResp.AccessToken, refreshResp.RefreshToken, refreshResp.TokenType, refreshResp.Scope, refreshResp.ExpiresIn); err != nil {
+		return err
 	}
-	m.token.TokenType = refreshResp.TokenType
+	slog.Info("Refreshed Twitter OAuth 2.0 access token")
+	return nil
+}
+
+func (m *TokenManager) ExchangeAuthorizationCode(ctx context.Context, code, codeVerifier string) error {
+	if code == "" {
+		return fmt.Errorf("twitter OAuth 2.0 authorization code is empty")
+	}
+	if codeVerifier == "" {
+		return fmt.Errorf("twitter OAuth 2.0 PKCE code verifier is empty")
+	}
+	if m.cfg.RedirectURL == "" {
+		return fmt.Errorf("twitter OAuth 2.0 redirect URL is not configured")
+	}
+
+	values := url.Values{}
+	values.Set("grant_type", "authorization_code")
+	values.Set("code", code)
+	values.Set("redirect_uri", m.cfg.RedirectURL)
+	values.Set("code_verifier", codeVerifier)
+	values.Set("client_id", m.cfg.ClientID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, OAuth2TokenEndpoint, strings.NewReader(values.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		preview := previewBody(respBytes, code)
+		return fmt.Errorf("twitter OAuth 2.0 authorization code exchange failed with status %d: %s", resp.StatusCode, preview)
+	}
+
+	var tokenResp struct {
+		TokenType    string `json:"token_type"`
+		ExpiresIn    int64  `json:"expires_in"`
+		AccessToken  string `json:"access_token"`
+		Scope        string `json:"scope"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal(respBytes, &tokenResp); err != nil {
+		return fmt.Errorf("failed to parse twitter OAuth 2.0 token response: %w", err)
+	}
+	if tokenResp.AccessToken == "" {
+		return fmt.Errorf("twitter OAuth 2.0 token response did not include access token")
+	}
+	if tokenResp.RefreshToken == "" {
+		return fmt.Errorf("twitter OAuth 2.0 token response did not include refresh token")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.storeTokenResponseLocked(tokenResp.AccessToken, tokenResp.RefreshToken, tokenResp.TokenType, tokenResp.Scope, tokenResp.ExpiresIn); err != nil {
+		return err
+	}
+	slog.Info("Stored Twitter OAuth 2.0 user token")
+	return nil
+}
+
+func (m *TokenManager) storeTokenResponseLocked(accessToken, refreshToken, tokenType, scope string, expiresIn int64) error {
+	m.token.AccessToken = accessToken
+	if refreshToken != "" {
+		m.token.RefreshToken = refreshToken
+	}
+	m.token.TokenType = tokenType
 	if m.token.TokenType == "" {
 		m.token.TokenType = "bearer"
 	}
-	m.token.Scope = refreshResp.Scope
-	if refreshResp.ExpiresIn > 0 {
-		m.token.ExpiresAt = time.Now().Add(time.Duration(refreshResp.ExpiresIn) * time.Second)
+	m.token.Scope = scope
+	if expiresIn > 0 {
+		m.token.ExpiresAt = time.Now().Add(time.Duration(expiresIn) * time.Second)
+	} else {
+		m.token.ExpiresAt = time.Time{}
 	}
 
 	if m.cfg.TokenStorePath != "" {
@@ -197,7 +293,6 @@ func (m *TokenManager) refreshLocked(ctx context.Context) error {
 			return err
 		}
 	}
-	slog.Info("Refreshed Twitter OAuth 2.0 access token")
 	return nil
 }
 

@@ -11,10 +11,8 @@ services:
       - -twitter-api-key-secret=${TWITTER_API_KEY_SECRET:?TWITTER_API_KEY_SECRET is required}
       - -twitter-access-token=${TWITTER_ACCESS_TOKEN:?TWITTER_ACCESS_TOKEN is required}
       - -twitter-access-token-secret=${TWITTER_ACCESS_TOKEN_SECRET:?TWITTER_ACCESS_TOKEN_SECRET is required}
-      - -twitter-user-access-token=${TWITTER_USER_ACCESS_TOKEN:-}
-      - -twitter-user-refresh-token=${TWITTER_USER_REFRESH_TOKEN:?TWITTER_USER_REFRESH_TOKEN is required}
       - -twitter-oauth2-client-id=${TWITTER_OAUTH2_CLIENT_ID:?TWITTER_OAUTH2_CLIENT_ID is required}
-      - -twitter-oauth2-client-secret=${TWITTER_OAUTH2_CLIENT_SECRET:-}
+      - -twitter-oauth2-redirect-url=${TWITTER_OAUTH2_REDIRECT_URL:?TWITTER_OAUTH2_REDIRECT_URL is required}
       - -twitter-token-store-path=${TWITTER_TOKEN_STORE_PATH:-data/twitter_oauth2_token.json}
       - -twitter-webhook-consumer-secret=${TWITTER_WEBHOOK_CONSUMER_SECRET:-}
       - -twitter-username=${TWITTER_USERNAME:-}
