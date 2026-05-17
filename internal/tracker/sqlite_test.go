@@ -28,7 +28,7 @@ func TestSQLiteCrossPostTracker_PersistsRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteCrossPostTracker() reopen error = %v", err)
 	}
-	defer tracker.Close()
+	defer closeTracker(t, tracker)
 
 	record, ok, err := tracker.FindByMisskeyNoteID(ctx, "note-1")
 	if err != nil {
@@ -48,7 +48,7 @@ func TestSQLiteCrossPostTracker_PruneRetention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteCrossPostTracker() error = %v", err)
 	}
-	defer tracker.Close()
+	defer closeTracker(t, tracker)
 
 	if err := tracker.RememberMisskeyToTweet(ctx, "note-old", "tweet-old"); err != nil {
 		t.Fatalf("RememberMisskeyToTweet() error = %v", err)
@@ -75,7 +75,7 @@ func TestSQLiteCrossPostTracker_NonPositiveRetentionKeepsRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteCrossPostTracker() error = %v", err)
 	}
-	defer tracker.Close()
+	defer closeTracker(t, tracker)
 
 	if err := tracker.RememberMisskeyToTweet(ctx, "note-old", "tweet-old"); err != nil {
 		t.Fatalf("RememberMisskeyToTweet() error = %v", err)
@@ -102,7 +102,7 @@ func TestSQLiteCrossPostTracker_RejectsConflictingIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteCrossPostTracker() error = %v", err)
 	}
-	defer tracker.Close()
+	defer closeTracker(t, tracker)
 
 	if err := tracker.RememberMisskeyToTweet(ctx, "note-1", "tweet-1"); err != nil {
 		t.Fatalf("RememberMisskeyToTweet() error = %v", err)
@@ -121,7 +121,7 @@ func TestSQLiteCrossPostTracker_ConcurrentAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteCrossPostTracker() error = %v", err)
 	}
-	defer tracker.Close()
+	defer closeTracker(t, tracker)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
@@ -147,5 +147,13 @@ func TestSQLiteCrossPostTracker_ConcurrentAccess(t *testing.T) {
 	}
 	if count != 100 {
 		t.Fatalf("Count() = %d, want 100", count)
+	}
+}
+
+func closeTracker(t *testing.T, tracker *SQLiteCrossPostTracker) {
+	t.Helper()
+
+	if err := tracker.Close(); err != nil {
+		t.Errorf("Close() error = %v", err)
 	}
 }
