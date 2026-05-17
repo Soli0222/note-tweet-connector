@@ -92,7 +92,7 @@ note-tweet-connector \
 
 `-misskey-hook-secret`、`-misskey-host`、`-misskey-token`、`-misskey-media-host`、`-twitter-api-key`、`-twitter-api-key-secret`、`-twitter-access-token`、`-twitter-access-token-secret`は必須です。
 
-Media API v2 chunked uploadにはOAuth 2.0 User Access Tokenが必要です。通常運用では`-twitter-user-refresh-token`と`-twitter-oauth2-client-id`を設定してください。`-twitter-user-access-token`は任意で、未指定の場合は初回利用時にrefresh tokenからaccess tokenを取得します。refresh tokenを取得する認可では`offline.access` scopeが必要です。
+Media API v2 chunked uploadにはOAuth 2.0 User Access Tokenが必要です。通常運用では`-twitter-user-refresh-token`と`-twitter-oauth2-client-id`を設定してください。`-twitter-user-access-token`は任意で、未指定の場合は初回利用時にrefresh tokenからaccess tokenを取得します。refresh tokenを取得する認可では`tweet.write`と`offline.access` scopeが必要です。画像付き投稿だけが403になる場合は、OAuth 2.0 User Access Tokenのscopeとdeveloper appのMedia APIアクセスを確認してください。
 
 Twitter Webhookの登録・確認にはOAuth 2.0 Application-Only Bearer Token、Account Activity subscriptionの作成にはOAuth 1.0a User Contextを使います。これらは初期設定用の認証情報であり、アプリ起動時のフラグとしては使いません。
 
