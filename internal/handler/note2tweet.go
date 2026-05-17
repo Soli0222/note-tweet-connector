@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"os"
 	"regexp"
 	"strings"
 
@@ -53,6 +52,10 @@ type payloadNoteData struct {
 }
 
 func Note2TweetHandler(ctx context.Context, data []byte, crossPostTracker tracker.CrossPostTracker, m *metrics.Metrics) error {
+	return Note2TweetHandlerWithConfig(ctx, Config{}, data, crossPostTracker, m)
+}
+
+func Note2TweetHandlerWithConfig(ctx context.Context, cfg Config, data []byte, crossPostTracker tracker.CrossPostTracker, m *metrics.Metrics) error {
 	m.Note2TweetTotal.Inc()
 
 	payload, err := parseNotePayload(data)
@@ -141,7 +144,7 @@ func Note2TweetHandler(ctx context.Context, data []byte, crossPostTracker tracke
 		if len(payload.Body.Note.Files) == 0 {
 			renoteHost := payload.Body.Note.Renote.User.Host
 			if renoteHost == "" {
-				renoteHost = os.Getenv("MISSKEY_HOST")
+				renoteHost = cfg.MisskeyHost
 			}
 			noteText = "RN [at]" + payload.Body.Note.Renote.User.Username + "[at]" + renoteHost + "\n\n" + payload.Body.Note.Renote.Text + "\n\n" + payload.Body.Note.Renote.URI
 		}
@@ -171,16 +174,19 @@ func Note2TweetHandler(ctx context.Context, data []byte, crossPostTracker tracke
 	}
 
 	var tweetID string
-	if quoteTweetID != "" {
-		tweetID, err = postTweetWithOptions(ctx, twitter.PostOptions{
-			Text:         noteText,
-			MediaURLs:    fileURLs,
-			QuoteTweetID: quoteTweetID,
-		})
+	options := twitter.PostOptions{
+		Text:         noteText,
+		MediaURLs:    fileURLs,
+		QuoteTweetID: quoteTweetID,
+	}
+	if cfg.Twitter != (twitter.Config{}) {
+		tweetID, err = twitter.PostWithOptionsConfig(ctx, cfg.Twitter, options)
+	} else if quoteTweetID != "" {
+		tweetID, err = postTweetWithOptions(ctx, options)
 	} else if len(fileURLs) == 0 {
-		tweetID, err = postTweet(ctx, noteText)
+		tweetID, err = postTweet(ctx, options.Text)
 	} else {
-		tweetID, err = postTweetWithMedia(ctx, noteText, fileURLs)
+		tweetID, err = postTweetWithMedia(ctx, options.Text, options.MediaURLs)
 	}
 
 	if err == nil {

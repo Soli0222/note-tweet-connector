@@ -11,6 +11,15 @@ import (
 	"github.com/Soli0222/note-tweet-connector/internal/tracker"
 )
 
+func testHandlerConfig() Config {
+	return Config{
+		MisskeyHost:              "misskey.example",
+		MisskeyToken:             "test-token",
+		TwitterUsername:          "fallback_user",
+		TwitterMediaAllowedHosts: []string{"pbs.twimg.com", "video.twimg.com"},
+	}
+}
+
 func TestParseAccountActivityPayload(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -317,9 +326,6 @@ func TestHandleIncomingTweet_WithMedia(t *testing.T) {
 	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
-	t.Setenv("MISSKEY_HOST", "misskey.example")
-	t.Setenv("MISSKEY_TOKEN", "test-token")
-
 	oldCreate := createMisskeyNoteWithOptions
 	oldUpload := uploadMisskeyDriveFileFromURL
 	defer func() {
@@ -328,9 +334,12 @@ func TestHandleIncomingTweet_WithMedia(t *testing.T) {
 	}()
 
 	var uploadedURLs []string
-	uploadMisskeyDriveFileFromURL = func(ctx context.Context, host, token, fileURL string) (string, error) {
+	uploadMisskeyDriveFileFromURL = func(ctx context.Context, host, token, fileURL string, allowedHosts []string) (string, error) {
 		if host != "misskey.example" || token != "test-token" {
 			t.Fatalf("unexpected upload auth host=%q token=%q", host, token)
+		}
+		if !reflect.DeepEqual(allowedHosts, []string{"pbs.twimg.com", "video.twimg.com"}) {
+			t.Fatalf("allowedHosts = %#v", allowedHosts)
 		}
 		uploadedURLs = append(uploadedURLs, fileURL)
 		return "file-" + string(rune('0'+len(uploadedURLs))), nil
@@ -355,7 +364,7 @@ func TestHandleIncomingTweet_WithMedia(t *testing.T) {
 		MediaURLs: []string{"https://pbs.twimg.com/media/1.png", "https://pbs.twimg.com/media/2.png"},
 	}
 
-	if err := HandleIncomingTweet(ctx, tweet, crossPostTracker, m); err != nil {
+	if err := HandleIncomingTweetWithConfig(ctx, testHandlerConfig(), tweet, crossPostTracker, m); err != nil {
 		t.Fatalf("HandleIncomingTweet() error = %v", err)
 	}
 	if !reflect.DeepEqual(uploadedURLs, tweet.MediaURLs) {
@@ -384,9 +393,6 @@ func TestHandleIncomingTweet_QuoteTweetUsesTrackerNoteID(t *testing.T) {
 	}
 	m := metrics.NewNoop()
 
-	t.Setenv("MISSKEY_HOST", "misskey.example")
-	t.Setenv("MISSKEY_TOKEN", "test-token")
-
 	oldCreate := createMisskeyNoteWithOptions
 	defer func() { createMisskeyNoteWithOptions = oldCreate }()
 
@@ -410,7 +416,7 @@ func TestHandleIncomingTweet_QuoteTweetUsesTrackerNoteID(t *testing.T) {
 		QuotedUsername: "dummy_user",
 	}
 
-	if err := HandleIncomingTweet(ctx, tweet, crossPostTracker, m); err != nil {
+	if err := HandleIncomingTweetWithConfig(ctx, testHandlerConfig(), tweet, crossPostTracker, m); err != nil {
 		t.Fatalf("HandleIncomingTweet() error = %v", err)
 	}
 	if gotOptions.Text != tweet.Text {
@@ -437,9 +443,6 @@ func TestHandleIncomingTweet_QuoteTweetFallsBackWhenTrackerMiss(t *testing.T) {
 	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
-	t.Setenv("MISSKEY_HOST", "misskey.example")
-	t.Setenv("MISSKEY_TOKEN", "test-token")
-
 	oldCreate := createMisskeyNoteWithOptions
 	defer func() { createMisskeyNoteWithOptions = oldCreate }()
 
@@ -460,7 +463,7 @@ func TestHandleIncomingTweet_QuoteTweetFallsBackWhenTrackerMiss(t *testing.T) {
 		QuotedUsername: "dummy_user",
 	}
 
-	if err := HandleIncomingTweet(ctx, tweet, crossPostTracker, m); err != nil {
+	if err := HandleIncomingTweetWithConfig(ctx, testHandlerConfig(), tweet, crossPostTracker, m); err != nil {
 		t.Fatalf("HandleIncomingTweet() error = %v", err)
 	}
 	if gotOptions.RenoteID != "" {
@@ -476,9 +479,6 @@ func TestTweet2NoteHandler_SkipConditions(t *testing.T) {
 	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
-	t.Setenv("MISSKEY_HOST", "misskey.example")
-	t.Setenv("MISSKEY_TOKEN", "test-token")
-
 	payload := `{
 		"for_user_id": "111",
 		"tweet_create_events": [
@@ -493,7 +493,7 @@ func TestTweet2NoteHandler_SkipConditions(t *testing.T) {
 		]
 	}`
 
-	err := Tweet2NoteHandler(ctx, []byte(payload), crossPostTracker, m)
+	err := Tweet2NoteHandlerWithConfig(ctx, testHandlerConfig(), []byte(payload), crossPostTracker, m)
 	if err != nil {
 		t.Errorf("Tweet2NoteHandler() should not return error for RN pattern, got %v", err)
 	}
@@ -503,9 +503,6 @@ func TestTweet2NoteHandler_KnownCrossPostDetection(t *testing.T) {
 	ctx := context.Background()
 	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
-
-	t.Setenv("MISSKEY_HOST", "misskey.example")
-	t.Setenv("MISSKEY_TOKEN", "test-token")
 
 	if err := crossPostTracker.RememberMisskeyToTweet(ctx, "note-222", "222"); err != nil {
 		t.Fatalf("RememberMisskeyToTweet() error = %v", err)
@@ -525,7 +522,7 @@ func TestTweet2NoteHandler_KnownCrossPostDetection(t *testing.T) {
 		]
 	}`
 
-	err := Tweet2NoteHandler(ctx, []byte(payload), crossPostTracker, m)
+	err := Tweet2NoteHandlerWithConfig(ctx, testHandlerConfig(), []byte(payload), crossPostTracker, m)
 	if err != nil {
 		t.Errorf("Tweet2NoteHandler() should not return error for known cross-post, got %v", err)
 	}
@@ -535,9 +532,6 @@ func TestTweet2NoteHandler_SkipsMissingTweetID(t *testing.T) {
 	ctx := context.Background()
 	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
-
-	t.Setenv("MISSKEY_HOST", "misskey.example")
-	t.Setenv("MISSKEY_TOKEN", "test-token")
 
 	oldCreate := createMisskeyNoteWithOptions
 	defer func() { createMisskeyNoteWithOptions = oldCreate }()
@@ -559,7 +553,7 @@ func TestTweet2NoteHandler_SkipsMissingTweetID(t *testing.T) {
 		]
 	}`
 
-	if err := Tweet2NoteHandler(ctx, []byte(payload), crossPostTracker, m); err != nil {
+	if err := Tweet2NoteHandlerWithConfig(ctx, testHandlerConfig(), []byte(payload), crossPostTracker, m); err != nil {
 		t.Fatalf("Tweet2NoteHandler() error = %v", err)
 	}
 }
@@ -569,10 +563,7 @@ func TestTweet2NoteHandler_InvalidJSON(t *testing.T) {
 	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
-	t.Setenv("MISSKEY_HOST", "misskey.example")
-	t.Setenv("MISSKEY_TOKEN", "test-token")
-
-	err := Tweet2NoteHandler(ctx, []byte(`{invalid json}`), crossPostTracker, m)
+	err := Tweet2NoteHandlerWithConfig(ctx, testHandlerConfig(), []byte(`{invalid json}`), crossPostTracker, m)
 	if err == nil {
 		t.Error("Tweet2NoteHandler() should return error for invalid JSON")
 	}
@@ -611,8 +602,6 @@ func TestBuildTweetURL(t *testing.T) {
 }
 
 func TestParseAccountActivityPayload_UsernameFallback(t *testing.T) {
-	t.Setenv("TWITTER_USERNAME", "fallback_user")
-
 	payload := `{
 		"for_user_id": "111",
 		"tweet_create_events": [
@@ -626,7 +615,7 @@ func TestParseAccountActivityPayload_UsernameFallback(t *testing.T) {
 		]
 	}`
 
-	result, err := parseAccountActivityPayload([]byte(payload))
+	result, err := parseAccountActivityPayloadWithConfig([]byte(payload), testHandlerConfig())
 	if err != nil {
 		t.Fatalf("parseAccountActivityPayload() error = %v", err)
 	}

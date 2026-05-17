@@ -101,12 +101,8 @@ func TestWithTestData_Tweet2NoteHandler(t *testing.T) {
 	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
-	// Set required environment variables
-	t.Setenv("MISSKEY_HOST", "misskey.example")
-	t.Setenv("MISSKEY_TOKEN", "test-token")
-
 	// Test data has "RN [at]" pattern, so it should be skipped without API call
-	err = Tweet2NoteHandler(ctx, data, crossPostTracker, m)
+	err = Tweet2NoteHandlerWithConfig(ctx, testHandlerConfig(), data, crossPostTracker, m)
 	if err != nil {
 		t.Errorf("Tweet2NoteHandler() should not return error for RN pattern, got %v", err)
 	}

@@ -14,14 +14,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Soli0222/note-tweet-connector/internal/handler"
 	"github.com/Soli0222/note-tweet-connector/internal/metrics"
+	"github.com/Soli0222/note-tweet-connector/internal/misskey"
 	"github.com/Soli0222/note-tweet-connector/internal/tracker"
-	"github.com/joho/godotenv"
+	"github.com/Soli0222/note-tweet-connector/internal/twitter"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -38,6 +40,19 @@ type Config struct {
 	IdleTimeout      time.Duration
 	ShutdownTimeout  time.Duration
 	LogLevel         string
+
+	MisskeyHookSecret            string
+	MisskeyHost                  string
+	MisskeyToken                 string
+	MisskeyMediaHost             string
+	TwitterMediaHosts            string
+	TwitterAPIKey                string
+	TwitterAPIKeySecret          string
+	TwitterAccessToken           string
+	TwitterAccessTokenSecret     string
+	TwitterUserAccessToken       string
+	TwitterWebhookConsumerSecret string
+	TwitterUsername              string
 }
 
 func parseFlags() *Config {
@@ -52,6 +67,18 @@ func parseFlags() *Config {
 	flag.DurationVar(&cfg.IdleTimeout, "idle-timeout", 60*time.Second, "HTTP idle timeout")
 	flag.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", 30*time.Second, "Graceful shutdown timeout")
 	flag.StringVar(&cfg.LogLevel, "log-level", "info", "Log level (debug, info, warn, error)")
+	flag.StringVar(&cfg.MisskeyHookSecret, "misskey-hook-secret", "", "Secret used to verify Misskey webhook requests")
+	flag.StringVar(&cfg.MisskeyHost, "misskey-host", "", "Misskey instance host")
+	flag.StringVar(&cfg.MisskeyToken, "misskey-token", "", "Misskey API token")
+	flag.StringVar(&cfg.MisskeyMediaHost, "misskey-media-host", "", "Allowed Misskey media host for Twitter uploads")
+	flag.StringVar(&cfg.TwitterMediaHosts, "twitter-media-hosts", misskey.DefaultTwitterMediaHosts, "Comma-separated allowed Twitter media hosts for Misskey uploads")
+	flag.StringVar(&cfg.TwitterAPIKey, "twitter-api-key", "", "Twitter API key")
+	flag.StringVar(&cfg.TwitterAPIKeySecret, "twitter-api-key-secret", "", "Twitter API key secret")
+	flag.StringVar(&cfg.TwitterAccessToken, "twitter-access-token", "", "Twitter access token")
+	flag.StringVar(&cfg.TwitterAccessTokenSecret, "twitter-access-token-secret", "", "Twitter access token secret")
+	flag.StringVar(&cfg.TwitterUserAccessToken, "twitter-user-access-token", "", "Twitter OAuth 2.0 user access token")
+	flag.StringVar(&cfg.TwitterWebhookConsumerSecret, "twitter-webhook-consumer-secret", "", "Twitter webhook consumer secret; defaults to twitter-api-key-secret")
+	flag.StringVar(&cfg.TwitterUsername, "twitter-username", "", "Fallback Twitter username")
 
 	showVersion := flag.Bool("version", false, "Show version and exit")
 
@@ -62,25 +89,52 @@ func parseFlags() *Config {
 		os.Exit(0)
 	}
 
-	// Environment variable override for port (for backward compatibility)
-	if envPort := os.Getenv("PORT"); envPort != "" {
-		cfg.Port = envPort
+	return cfg
+}
+
+func (cfg *Config) validate() error {
+	var missing []string
+	required := map[string]string{
+		"-misskey-hook-secret":         cfg.MisskeyHookSecret,
+		"-misskey-host":                cfg.MisskeyHost,
+		"-misskey-token":               cfg.MisskeyToken,
+		"-misskey-media-host":          cfg.MisskeyMediaHost,
+		"-twitter-api-key":             cfg.TwitterAPIKey,
+		"-twitter-api-key-secret":      cfg.TwitterAPIKeySecret,
+		"-twitter-access-token":        cfg.TwitterAccessToken,
+		"-twitter-access-token-secret": cfg.TwitterAccessTokenSecret,
+		"-twitter-user-access-token":   cfg.TwitterUserAccessToken,
 	}
-	if envTrackerDBPath := os.Getenv("TRACKER_DB_PATH"); envTrackerDBPath != "" {
-		cfg.TrackerDBPath = envTrackerDBPath
-	}
-	if envTrackerRetention := os.Getenv("TRACKER_RETENTION"); envTrackerRetention != "" {
-		retention, err := time.ParseDuration(envTrackerRetention)
-		if err != nil {
-			slog.Warn("Invalid TRACKER_RETENTION, using configured value",
-				slog.String("tracker_retention", envTrackerRetention),
-				slog.Any("error", err))
-		} else {
-			cfg.TrackerRetention = retention
+	for name, value := range required {
+		if value == "" {
+			missing = append(missing, name)
 		}
 	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("missing required flags: %s", strings.Join(missing, ", "))
+	}
+	if cfg.TwitterWebhookConsumerSecret == "" {
+		cfg.TwitterWebhookConsumerSecret = cfg.TwitterAPIKeySecret
+	}
+	return nil
+}
 
-	return cfg
+func (cfg *Config) handlerConfig() handler.Config {
+	return handler.Config{
+		MisskeyHost:              cfg.MisskeyHost,
+		MisskeyToken:             cfg.MisskeyToken,
+		TwitterUsername:          cfg.TwitterUsername,
+		TwitterMediaAllowedHosts: misskey.ParseAllowedHosts(cfg.TwitterMediaHosts),
+		Twitter: twitter.Config{
+			APIKey:            cfg.TwitterAPIKey,
+			APIKeySecret:      cfg.TwitterAPIKeySecret,
+			AccessToken:       cfg.TwitterAccessToken,
+			AccessTokenSecret: cfg.TwitterAccessTokenSecret,
+			UserAccessToken:   cfg.TwitterUserAccessToken,
+			MisskeyMediaHost:  cfg.MisskeyMediaHost,
+		},
+	}
 }
 
 func setupLogger(level string) {
@@ -107,6 +161,9 @@ func setupLogger(level string) {
 type server struct {
 	crossPostTracker tracker.CrossPostTracker
 	metrics          *metrics.Metrics
+	cfg              handler.Config
+	misskeySecret    string
+	twitterSecret    string
 }
 
 func (s *server) webhookHandler(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +176,7 @@ func (s *server) webhookHandler(w http.ResponseWriter, r *http.Request) {
 	if strings.Contains(userAgent, "Misskey-Hooks") {
 		start := time.Now()
 		secret := r.Header.Get("X-Misskey-Hook-Secret")
-		expectedSecret := os.Getenv("MISSKEY_HOOK_SECRET")
+		expectedSecret := s.misskeySecret
 		if expectedSecret == "" || secret != expectedSecret {
 			http.Error(w, "Invalid Misskey secret", http.StatusUnauthorized)
 			slog.Error("Invalid Misskey secret")
@@ -137,7 +194,7 @@ func (s *server) webhookHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		err = handler.Note2TweetHandler(r.Context(), body, s.crossPostTracker, s.metrics)
+		err = handler.Note2TweetHandlerWithConfig(r.Context(), s.cfg, body, s.crossPostTracker, s.metrics)
 		if err != nil {
 			http.Error(w, "Failed to handle request", http.StatusInternalServerError)
 			slog.Error("Failed to handle request", slog.Any("error", err))
@@ -172,7 +229,7 @@ func (s *server) twitterWebhookHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		responseToken, err := twitterResponseToken(crcToken)
+		responseToken, err := twitterResponseToken(crcToken, s.twitterSecret)
 		if err != nil {
 			http.Error(w, "Twitter webhook secret is not configured", http.StatusInternalServerError)
 			slog.Error("Twitter webhook secret is not configured", slog.Any("error", err))
@@ -202,7 +259,7 @@ func (s *server) twitterWebhookHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		signature := r.Header.Get("x-twitter-webhooks-signature")
-		if ok, err := verifyTwitterSignature(body, signature); err != nil || !ok {
+		if ok, err := verifyTwitterSignature(body, signature, s.twitterSecret); err != nil || !ok {
 			http.Error(w, "Invalid Twitter signature", http.StatusUnauthorized)
 			slog.Error("Invalid Twitter signature", slog.Any("error", err))
 			s.metrics.WebhookRequestsTotal.WithLabelValues("twitter", "unauthorized").Inc()
@@ -210,7 +267,7 @@ func (s *server) twitterWebhookHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := handler.Tweet2NoteHandler(r.Context(), body, s.crossPostTracker, s.metrics); err != nil {
+		if err := handler.Tweet2NoteHandlerWithConfig(r.Context(), s.cfg, body, s.crossPostTracker, s.metrics); err != nil {
 			http.Error(w, "Failed to handle request", http.StatusInternalServerError)
 			slog.Error("Failed to handle request", slog.Any("error", err))
 			s.metrics.WebhookRequestsTotal.WithLabelValues("twitter", "error").Inc()
@@ -225,16 +282,16 @@ func (s *server) twitterWebhookHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func twitterResponseToken(crcToken string) (string, error) {
-	signature, err := twitterHMAC([]byte(crcToken))
+func twitterResponseToken(crcToken, secret string) (string, error) {
+	signature, err := twitterHMAC([]byte(crcToken), secret)
 	if err != nil {
 		return "", err
 	}
 	return "sha256=" + signature, nil
 }
 
-func verifyTwitterSignature(body []byte, signature string) (bool, error) {
-	expected, err := twitterHMAC(body)
+func verifyTwitterSignature(body []byte, signature, secret string) (bool, error) {
+	expected, err := twitterHMAC(body, secret)
 	if err != nil {
 		return false, err
 	}
@@ -242,13 +299,9 @@ func verifyTwitterSignature(body []byte, signature string) (bool, error) {
 	return subtle.ConstantTimeCompare([]byte(signature), []byte(want)) == 1, nil
 }
 
-func twitterHMAC(message []byte) (string, error) {
-	secret := os.Getenv("TWITTER_WEBHOOK_CONSUMER_SECRET")
+func twitterHMAC(message []byte, secret string) (string, error) {
 	if secret == "" {
-		secret = os.Getenv("API_KEY_SECRET")
-	}
-	if secret == "" {
-		return "", fmt.Errorf("TWITTER_WEBHOOK_CONSUMER_SECRET or API_KEY_SECRET must be set")
+		return "", fmt.Errorf("twitter webhook consumer secret must be set")
 	}
 
 	mac := hmac.New(sha256.New, []byte(secret))
@@ -302,13 +355,13 @@ func updateTrackerEntriesMetric(ctx context.Context, crossPostTracker tracker.Cr
 }
 
 func main() {
-	if err := godotenv.Load(); err != nil {
-		slog.Warn(".env file not found, using environment variables")
-	}
-
 	cfg := parseFlags()
 
 	setupLogger(cfg.LogLevel)
+	if err := cfg.validate(); err != nil {
+		slog.Error("Invalid configuration", slog.Any("error", err))
+		os.Exit(1)
+	}
 
 	printBanner()
 
@@ -334,6 +387,9 @@ func main() {
 	s := &server{
 		crossPostTracker: crossPostTracker,
 		metrics:          m,
+		cfg:              cfg.handlerConfig(),
+		misskeySecret:    cfg.MisskeyHookSecret,
+		twitterSecret:    cfg.TwitterWebhookConsumerSecret,
 	}
 
 	// Main server

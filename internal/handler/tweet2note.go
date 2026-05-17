@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"regexp"
 	"strings"
 
 	"github.com/Soli0222/note-tweet-connector/internal/metrics"
 	"github.com/Soli0222/note-tweet-connector/internal/misskey"
 	"github.com/Soli0222/note-tweet-connector/internal/tracker"
+	"github.com/Soli0222/note-tweet-connector/internal/twitter"
 )
 
 type IncomingTweet struct {
@@ -24,6 +24,14 @@ type IncomingTweet struct {
 	QuotedTweetID  string
 	QuotedUserID   string
 	QuotedUsername string
+}
+
+type Config struct {
+	MisskeyHost              string
+	MisskeyToken             string
+	TwitterUsername          string
+	TwitterMediaAllowedHosts []string
+	Twitter                  twitter.Config
 }
 
 type accountActivityPayload struct {
@@ -69,12 +77,16 @@ type twitterUser struct {
 var rnAtPattern = regexp.MustCompile(`^RN\s*\[at\]`)
 
 var createMisskeyNoteWithOptions = misskey.CreateNoteWithOptions
-var uploadMisskeyDriveFileFromURL = misskey.UploadDriveFileFromURL
+var uploadMisskeyDriveFileFromURL = misskey.UploadDriveFileFromURLWithAllowedHosts
 
 func Tweet2NoteHandler(ctx context.Context, data []byte, crossPostTracker tracker.CrossPostTracker, m *metrics.Metrics) error {
+	return Tweet2NoteHandlerWithConfig(ctx, Config{}, data, crossPostTracker, m)
+}
+
+func Tweet2NoteHandlerWithConfig(ctx context.Context, cfg Config, data []byte, crossPostTracker tracker.CrossPostTracker, m *metrics.Metrics) error {
 	m.Tweet2NoteTotal.Inc()
 
-	tweets, err := parseAccountActivityPayload(data)
+	tweets, err := parseAccountActivityPayloadWithConfig(data, cfg)
 	if err != nil {
 		slog.Error("Failed to parse payload", slog.Any("error", err))
 		m.Tweet2NoteErrors.Inc()
@@ -82,7 +94,7 @@ func Tweet2NoteHandler(ctx context.Context, data []byte, crossPostTracker tracke
 	}
 
 	for _, tweet := range tweets {
-		if err := HandleIncomingTweet(ctx, tweet, crossPostTracker, m); err != nil {
+		if err := HandleIncomingTweetWithConfig(ctx, cfg, tweet, crossPostTracker, m); err != nil {
 			return err
 		}
 	}
@@ -91,6 +103,10 @@ func Tweet2NoteHandler(ctx context.Context, data []byte, crossPostTracker tracke
 }
 
 func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, crossPostTracker tracker.CrossPostTracker, m *metrics.Metrics) error {
+	return HandleIncomingTweetWithConfig(ctx, Config{}, tweet, crossPostTracker, m)
+}
+
+func HandleIncomingTweetWithConfig(ctx context.Context, cfg Config, tweet IncomingTweet, crossPostTracker tracker.CrossPostTracker, m *metrics.Metrics) error {
 	if tweet.ID == "" {
 		slog.Warn("Tweet ID is missing, skipping")
 		m.Tweet2NoteSkipped.WithLabelValues("missing_id").Inc()
@@ -154,23 +170,21 @@ func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, crossPostTrac
 		}
 	}
 
-	misskeyHost := os.Getenv("MISSKEY_HOST")
-	if misskeyHost == "" {
+	if cfg.MisskeyHost == "" {
 		slog.Error("MISSKEY_HOST is not set")
 		m.Tweet2NoteErrors.Inc()
-		return fmt.Errorf("MISSKEY_HOST environment variable is not set")
+		return fmt.Errorf("misskey host is not configured")
 	}
 
-	misskeyToken := os.Getenv("MISSKEY_TOKEN")
-	if misskeyToken == "" {
+	if cfg.MisskeyToken == "" {
 		slog.Error("MISSKEY_TOKEN is not set")
 		m.Tweet2NoteErrors.Inc()
-		return fmt.Errorf("MISSKEY_TOKEN environment variable is not set")
+		return fmt.Errorf("misskey token is not configured")
 	}
 
 	fileIDs := make([]string, 0, min(len(tweet.MediaURLs), 4))
 	for i := 0; i < len(tweet.MediaURLs) && i < 4; i++ {
-		fileID, err := uploadMisskeyDriveFileFromURL(ctx, misskeyHost, misskeyToken, tweet.MediaURLs[i])
+		fileID, err := uploadMisskeyDriveFileFromURL(ctx, cfg.MisskeyHost, cfg.MisskeyToken, tweet.MediaURLs[i], cfg.TwitterMediaAllowedHosts)
 		if err != nil {
 			slog.Error("Failed to upload tweet media to Misskey Drive",
 				slog.String("media_url", tweet.MediaURLs[i]),
@@ -181,7 +195,7 @@ func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, crossPostTrac
 		fileIDs = append(fileIDs, fileID)
 	}
 
-	noteID, err := createMisskeyNoteWithOptions(ctx, misskeyHost, misskeyToken, misskey.CreateNoteOptions{
+	noteID, err := createMisskeyNoteWithOptions(ctx, cfg.MisskeyHost, cfg.MisskeyToken, misskey.CreateNoteOptions{
 		Text:     tweetText,
 		FileIDs:  fileIDs,
 		RenoteID: renoteID,
@@ -220,6 +234,10 @@ func HandleIncomingTweet(ctx context.Context, tweet IncomingTweet, crossPostTrac
 }
 
 func parseAccountActivityPayload(data []byte) ([]IncomingTweet, error) {
+	return parseAccountActivityPayloadWithConfig(data, Config{})
+}
+
+func parseAccountActivityPayloadWithConfig(data []byte, cfg Config) ([]IncomingTweet, error) {
 	var payload accountActivityPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return nil, err
@@ -240,7 +258,7 @@ func parseAccountActivityPayload(data []byte) ([]IncomingTweet, error) {
 		tweetID := event.IDStr
 		username := event.User.ScreenName
 		if username == "" {
-			username = os.Getenv("TWITTER_USERNAME")
+			username = cfg.TwitterUsername
 		}
 		quotedTweetID, quotedUserID, quotedUsername := quotedTweet(event)
 		tweets = append(tweets, IncomingTweet{

@@ -10,11 +10,12 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"strings"
 	"time"
 )
+
+const DefaultTwitterMediaHosts = "pbs.twimg.com,video.twimg.com"
 
 // httpClient is a reusable HTTP client with timeout
 var httpClient = &http.Client{
@@ -108,7 +109,11 @@ func CreateNoteWithOptions(ctx context.Context, host, token string, options Crea
 
 // UploadDriveFileFromURL downloads an image from fileURL and uploads it to Misskey Drive.
 func UploadDriveFileFromURL(ctx context.Context, host, token, fileURL string) (string, error) {
-	if err := validateTwitterMediaURL(fileURL); err != nil {
+	return UploadDriveFileFromURLWithAllowedHosts(ctx, host, token, fileURL, ParseAllowedHosts(DefaultTwitterMediaHosts))
+}
+
+func UploadDriveFileFromURLWithAllowedHosts(ctx context.Context, host, token, fileURL string, allowedHosts []string) (string, error) {
+	if err := validateTwitterMediaURL(fileURL, allowedHosts); err != nil {
 		return "", err
 	}
 
@@ -204,7 +209,7 @@ func downloadImage(ctx context.Context, fileURL string) ([]byte, string, string,
 	return mediaBytes, mediaType, filenameFromURL(fileURL), nil
 }
 
-func validateTwitterMediaURL(fileURL string) error {
+func validateTwitterMediaURL(fileURL string, allowedHosts []string) error {
 	parsed, err := url.Parse(fileURL)
 	if err != nil {
 		return fmt.Errorf("invalid URL: %w", err)
@@ -214,7 +219,7 @@ func validateTwitterMediaURL(fileURL string) error {
 	}
 
 	host := strings.ToLower(parsed.Host)
-	for _, allowedHost := range allowedTwitterMediaHosts() {
+	for _, allowedHost := range allowedHosts {
 		if host == allowedHost {
 			return nil
 		}
@@ -223,12 +228,7 @@ func validateTwitterMediaURL(fileURL string) error {
 	return fmt.Errorf("URL host %q is not allowed", host)
 }
 
-func allowedTwitterMediaHosts() []string {
-	rawHosts := os.Getenv("TWITTER_MEDIA_HOSTS")
-	if rawHosts == "" {
-		rawHosts = "pbs.twimg.com,video.twimg.com"
-	}
-
+func ParseAllowedHosts(rawHosts string) []string {
 	hosts := strings.Split(rawHosts, ",")
 	allowedHosts := make([]string, 0, len(hosts))
 	for _, host := range hosts {

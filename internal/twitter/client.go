@@ -10,7 +10,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"strings"
 	"time"
@@ -54,8 +53,17 @@ type PostOptions struct {
 	QuoteTweetID string
 }
 
+type Config struct {
+	APIKey            string
+	APIKeySecret      string
+	AccessToken       string
+	AccessTokenSecret string
+	UserAccessToken   string
+	MisskeyMediaHost  string
+}
+
 // validateMediaURL validates that the media URL is from an allowed host
-func validateMediaURL(fileURL string) error {
+func validateMediaURL(fileURL, mediaHost string) error {
 	parsed, err := url.Parse(fileURL)
 	if err != nil {
 		return fmt.Errorf("invalid URL: %w", err)
@@ -68,8 +76,6 @@ func validateMediaURL(fileURL string) error {
 
 	// Check against allowed media host
 	host := strings.ToLower(parsed.Host)
-	mediaHost := os.Getenv("MISSKEY_MEDIA_HOST")
-
 	if mediaHost == "" {
 		return fmt.Errorf("MISSKEY_MEDIA_HOST is not configured")
 	}
@@ -81,45 +87,38 @@ func validateMediaURL(fileURL string) error {
 	return fmt.Errorf("URL host %q is not allowed (expected %q)", host, mediaHost)
 }
 
-func loadTwitterEnv() (string, string, string, string, error) {
-	apiKey := os.Getenv("API_KEY")
-	apiKeySecret := os.Getenv("API_KEY_SECRET")
-	accessToken := os.Getenv("ACCESS_TOKEN")
-	accessTokenSecret := os.Getenv("ACCESS_TOKEN_SECRET")
-
-	if apiKey == "" || apiKeySecret == "" || accessToken == "" || accessTokenSecret == "" {
-		return "", "", "", "", fmt.Errorf("missing Twitter API environment variables")
+func (cfg Config) validate() error {
+	if cfg.APIKey == "" || cfg.APIKeySecret == "" || cfg.AccessToken == "" || cfg.AccessTokenSecret == "" {
+		return fmt.Errorf("missing Twitter API credentials")
 	}
-	return apiKey, apiKeySecret, accessToken, accessTokenSecret, nil
-}
-
-func loadTwitterUserAccessToken() (string, error) {
-	token := os.Getenv("TWITTER_USER_ACCESS_TOKEN")
-	if token == "" {
-		return "", fmt.Errorf("TWITTER_USER_ACCESS_TOKEN environment variable is not set")
+	if cfg.UserAccessToken == "" {
+		return fmt.Errorf("twitter user access token is not configured")
 	}
-	return token, nil
+	return nil
 }
 
 // Post posts a tweet via Twitter API.
 func Post(ctx context.Context, text string) (string, error) {
-	return PostWithOptions(ctx, PostOptions{Text: text})
+	return PostWithOptionsConfig(ctx, Config{}, PostOptions{Text: text})
 }
 
 // PostWithMedia posts a tweet with media attachments via Twitter API
 func PostWithMedia(ctx context.Context, text string, fileURLs []string) (string, error) {
-	return PostWithOptions(ctx, PostOptions{Text: text, MediaURLs: fileURLs})
+	return PostWithOptionsConfig(ctx, Config{}, PostOptions{Text: text, MediaURLs: fileURLs})
 }
 
 func PostWithOptions(ctx context.Context, options PostOptions) (string, error) {
-	ak, aks, at, ats, err := loadTwitterEnv()
-	if err != nil {
+	return PostWithOptionsConfig(ctx, Config{}, options)
+}
+
+func PostWithOptionsConfig(ctx context.Context, cfg Config, options PostOptions) (string, error) {
+	if err := cfg.validate(); err != nil {
 		slog.Error("Error loading Twitter API keys", slog.Any("error", err))
 		return "", err
 	}
 
-	config := oauth1.NewConfig(ak, aks)
-	token := oauth1.NewToken(at, ats)
+	config := oauth1.NewConfig(cfg.APIKey, cfg.APIKeySecret)
+	token := oauth1.NewToken(cfg.AccessToken, cfg.AccessTokenSecret)
 	oauthClient := config.Client(ctx, token)
 
 	limit := len(options.MediaURLs)
@@ -129,7 +128,7 @@ func PostWithOptions(ctx context.Context, options PostOptions) (string, error) {
 
 	var mediaIDs []string
 	for i := 0; i < limit; i++ {
-		mediaID, err := uploadMediaFromURL(ctx, options.MediaURLs[i])
+		mediaID, err := uploadMediaFromURL(ctx, cfg, options.MediaURLs[i])
 		if err != nil {
 			return "", err
 		}
@@ -205,9 +204,9 @@ func postTweet(ctx context.Context, oauthClient *http.Client, text string, media
 	return postResp.Data.ID, nil
 }
 
-func uploadMediaFromURL(ctx context.Context, fileURL string) (string, error) {
+func uploadMediaFromURL(ctx context.Context, cfg Config, fileURL string) (string, error) {
 	// Validate URL to prevent SSRF attacks
-	if err := validateMediaURL(fileURL); err != nil {
+	if err := validateMediaURL(fileURL, cfg.MisskeyMediaHost); err != nil {
 		slog.Error("Invalid media URL", slog.String("url", fileURL), slog.Any("error", err))
 		return "", fmt.Errorf("invalid media URL: %w", err)
 	}
@@ -245,12 +244,7 @@ func uploadMediaFromURL(ctx context.Context, fileURL string) (string, error) {
 		return "", err
 	}
 
-	bearerToken, err := loadTwitterUserAccessToken()
-	if err != nil {
-		return "", err
-	}
-
-	mediaID, err := initMediaUpload(ctx, bearerToken, mediaType, mediaCategory, len(mediaBytes))
+	mediaID, err := initMediaUpload(ctx, cfg.UserAccessToken, mediaType, mediaCategory, len(mediaBytes))
 	if err != nil {
 		return "", err
 	}
@@ -260,12 +254,12 @@ func uploadMediaFromURL(ctx context.Context, fileURL string) (string, error) {
 		if end > len(mediaBytes) {
 			end = len(mediaBytes)
 		}
-		if err := appendMediaUpload(ctx, bearerToken, mediaID, segmentIndex, mediaBytes[offset:end]); err != nil {
+		if err := appendMediaUpload(ctx, cfg.UserAccessToken, mediaID, segmentIndex, mediaBytes[offset:end]); err != nil {
 			return "", err
 		}
 	}
 
-	if err := finalizeMediaUpload(ctx, bearerToken, mediaID); err != nil {
+	if err := finalizeMediaUpload(ctx, cfg.UserAccessToken, mediaID); err != nil {
 		return "", err
 	}
 
