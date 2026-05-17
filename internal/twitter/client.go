@@ -3,6 +3,7 @@ package twitter
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -56,17 +57,15 @@ type PostOptions struct {
 }
 
 type Config struct {
-	APIKey             string
-	APIKeySecret       string
-	AccessToken        string
-	AccessTokenSecret  string
-	UserAccessToken    string
-	UserRefreshToken   string
-	OAuth2ClientID     string
-	OAuth2ClientSecret string
-	TokenStorePath     string
-	BearerTokenSource  BearerTokenSource
-	MisskeyMediaHost   string
+	APIKey            string
+	APIKeySecret      string
+	AccessToken       string
+	AccessTokenSecret string
+	OAuth2ClientID    string
+	OAuth2RedirectURL string
+	TokenStorePath    string
+	BearerTokenSource BearerTokenSource
+	MisskeyMediaHost  string
 }
 
 // validateMediaURL validates that the media URL is from an allowed host
@@ -105,17 +104,12 @@ func (cfg Config) bearerTokenSource() (BearerTokenSource, error) {
 	if cfg.BearerTokenSource != nil {
 		return cfg.BearerTokenSource, nil
 	}
-	if cfg.UserRefreshToken != "" && cfg.OAuth2ClientID != "" {
+	if cfg.OAuth2ClientID != "" {
 		return NewTokenManager(OAuth2Config{
 			ClientID:       cfg.OAuth2ClientID,
-			ClientSecret:   cfg.OAuth2ClientSecret,
-			AccessToken:    cfg.UserAccessToken,
-			RefreshToken:   cfg.UserRefreshToken,
+			RedirectURL:    cfg.OAuth2RedirectURL,
 			TokenStorePath: cfg.TokenStorePath,
 		})
-	}
-	if cfg.UserAccessToken != "" {
-		return StaticBearerTokenSource{Token: cfg.UserAccessToken}, nil
 	}
 	return nil, fmt.Errorf("twitter OAuth 2.0 bearer token source is not configured")
 }
@@ -305,19 +299,74 @@ func shouldUseSimpleMediaUpload(mediaType string, totalBytes int) bool {
 }
 
 func simpleMediaUpload(ctx context.Context, tokenSource BearerTokenSource, mediaType, mediaCategory string, mediaBytes []byte) (string, error) {
-	fields := map[string]string{
+	body := map[string]interface{}{
+		"media":          base64.StdEncoding.EncodeToString(mediaBytes),
 		"media_type":     mediaType,
 		"media_category": mediaCategory,
 	}
 
 	var uploadResponse UploadMediaResponse
-	if err := postMediaForm(ctx, tokenSource, fields, "media", mediaBytes, &uploadResponse); err != nil {
+	if err := postMediaJSON(ctx, tokenSource, body, &uploadResponse); err != nil {
 		return "", err
 	}
 	if uploadResponse.Data.ID == "" {
 		return "", fmt.Errorf("media upload response did not include data.id")
 	}
 	return uploadResponse.Data.ID, nil
+}
+
+func postMediaJSON(ctx context.Context, tokenSource BearerTokenSource, body map[string]interface{}, responseBody interface{}) error {
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+
+	var respBytes []byte
+	for attempt := 0; attempt < 2; attempt++ {
+		bearerToken, err := tokenSource.BearerToken(ctx)
+		if err != nil {
+			return err
+		}
+
+		uploadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, UploadMediaEndpoint, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return err
+		}
+		uploadReq.Header.Set("Authorization", "Bearer "+bearerToken)
+		uploadReq.Header.Set("Content-Type", "application/json")
+
+		uploadResp, err := httpClient.Do(uploadReq)
+		if err != nil {
+			return err
+		}
+		respBytes, err = io.ReadAll(uploadResp.Body)
+		_ = uploadResp.Body.Close()
+		if err != nil {
+			return err
+		}
+
+		if uploadResp.StatusCode == http.StatusUnauthorized && attempt == 0 {
+			refresher, ok := tokenSource.(ForceRefreshBearerTokenSource)
+			if ok {
+				if err := refresher.Refresh(ctx); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if uploadResp.StatusCode < http.StatusOK || uploadResp.StatusCode >= http.StatusMultipleChoices {
+			return mediaUploadRequestError("", uploadResp.StatusCode, respBytes)
+		}
+		break
+	}
+
+	if responseBody == nil || len(respBytes) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(respBytes, responseBody); err != nil {
+		return fmt.Errorf("failed to parse media upload response: %w", err)
+	}
+	return nil
 }
 
 func initMediaUpload(ctx context.Context, tokenSource BearerTokenSource, mediaType, mediaCategory string, totalBytes int) (string, error) {
@@ -527,7 +576,7 @@ func mediaUploadRequestError(command string, statusCode int, respBytes []byte) e
 		command = "request"
 	}
 	if statusCode == http.StatusForbidden {
-		return fmt.Errorf("media upload %s failed with status %d: %s; verify the Twitter OAuth 2.0 user token was authorized with tweet.write and offline.access scopes and that the developer app has Media API access", command, statusCode, detail)
+		return fmt.Errorf("media upload %s failed with status %d: %s; verify the Twitter OAuth 2.0 user token was authorized with media.write, tweet.write, and offline.access scopes and that the developer app has Media API access", command, statusCode, detail)
 	}
 	return fmt.Errorf("media upload %s failed with status %d: %s", command, statusCode, detail)
 }
