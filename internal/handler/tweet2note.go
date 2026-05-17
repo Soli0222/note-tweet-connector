@@ -15,15 +15,16 @@ import (
 )
 
 type IncomingTweet struct {
-	ID             string
-	Text           string
-	UserID         string
-	Username       string
-	URL            string
-	MediaURLs      []string
-	QuotedTweetID  string
-	QuotedUserID   string
-	QuotedUsername string
+	ID               string
+	Text             string
+	UserID           string
+	Username         string
+	URL              string
+	MediaURLs        []string
+	QuotedTweetID    string
+	QuotedUserID     string
+	QuotedUsername   string
+	InReplyToTweetID string
 }
 
 type Config struct {
@@ -40,16 +41,17 @@ type accountActivityPayload struct {
 }
 
 type tweetObject struct {
-	IDStr             string          `json:"id_str"`
-	Text              string          `json:"text"`
-	FullText          string          `json:"full_text"`
-	Truncated         bool            `json:"truncated"`
-	User              twitterUser     `json:"user"`
-	Entities          twitterEntities `json:"entities"`
-	ExtendedEntities  twitterEntities `json:"extended_entities"`
-	ExtendedTweet     extendedTweet   `json:"extended_tweet"`
-	QuotedStatusIDStr string          `json:"quoted_status_id_str"`
-	QuotedStatus      *tweetObject    `json:"quoted_status"`
+	IDStr                string          `json:"id_str"`
+	Text                 string          `json:"text"`
+	FullText             string          `json:"full_text"`
+	Truncated            bool            `json:"truncated"`
+	User                 twitterUser     `json:"user"`
+	Entities             twitterEntities `json:"entities"`
+	ExtendedEntities     twitterEntities `json:"extended_entities"`
+	ExtendedTweet        extendedTweet   `json:"extended_tweet"`
+	QuotedStatusIDStr    string          `json:"quoted_status_id_str"`
+	QuotedStatus         *tweetObject    `json:"quoted_status"`
+	InReplyToStatusIDStr string          `json:"in_reply_to_status_id_str"`
 }
 
 type extendedTweet struct {
@@ -131,6 +133,14 @@ func HandleIncomingTweetWithConfig(ctx context.Context, cfg Config, tweet Incomi
 			slog.String("tweet_id", tweet.ID))
 		m.Tweet2NoteSkipped.WithLabelValues("crosspost").Inc()
 		m.TrackerDuplicatesHit.Inc()
+		return nil
+	}
+
+	if tweet.InReplyToTweetID != "" {
+		slog.Info("Tweet is a reply, skipping",
+			slog.String("tweet_id", tweet.ID),
+			slog.String("in_reply_to_tweet_id", tweet.InReplyToTweetID))
+		m.Tweet2NoteSkipped.WithLabelValues("reply").Inc()
 		return nil
 	}
 
@@ -267,15 +277,16 @@ func parseAccountActivityPayloadWithConfig(data []byte, cfg Config) ([]IncomingT
 		}
 		quotedTweetID, quotedUserID, quotedUsername := quotedTweet(event)
 		tweets = append(tweets, IncomingTweet{
-			ID:             tweetID,
-			Text:           text,
-			UserID:         event.User.IDStr,
-			Username:       username,
-			URL:            buildTweetURL(username, tweetID),
-			MediaURLs:      mediaURLs,
-			QuotedTweetID:  quotedTweetID,
-			QuotedUserID:   quotedUserID,
-			QuotedUsername: quotedUsername,
+			ID:               tweetID,
+			Text:             text,
+			UserID:           event.User.IDStr,
+			Username:         username,
+			URL:              buildTweetURL(username, tweetID),
+			MediaURLs:        mediaURLs,
+			QuotedTweetID:    quotedTweetID,
+			QuotedUserID:     quotedUserID,
+			QuotedUsername:   quotedUsername,
+			InReplyToTweetID: event.InReplyToStatusIDStr,
 		})
 	}
 

@@ -9,6 +9,7 @@ import (
 	"github.com/Soli0222/note-tweet-connector/internal/metrics"
 	"github.com/Soli0222/note-tweet-connector/internal/tracker"
 	"github.com/Soli0222/note-tweet-connector/internal/twitter"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestParseNotePayload(t *testing.T) {
@@ -318,6 +319,88 @@ func TestNote2TweetHandler_KnownCrossPostDetection(t *testing.T) {
 	err := Note2TweetHandler(ctx, []byte(payload), crossPostTracker, m)
 	if err != nil {
 		t.Errorf("Note2TweetHandler() should not return error for known cross-post, got %v", err)
+	}
+}
+
+func TestNote2TweetHandler_SkipsReply(t *testing.T) {
+	ctx := context.Background()
+
+	oldPost := postTweet
+	oldPostWithMedia := postTweetWithMedia
+	oldPostWithOptions := postTweetWithOptions
+	defer func() {
+		postTweet = oldPost
+		postTweetWithMedia = oldPostWithMedia
+		postTweetWithOptions = oldPostWithOptions
+	}()
+
+	postTweet = func(ctx context.Context, text string) (string, error) {
+		t.Fatal("Post should not be called for a reply note")
+		return "", nil
+	}
+	postTweetWithMedia = func(ctx context.Context, text string, fileURLs []string) (string, error) {
+		t.Fatal("PostWithMedia should not be called for a reply note")
+		return "", nil
+	}
+	postTweetWithOptions = func(ctx context.Context, options twitter.PostOptions) (string, error) {
+		t.Fatal("PostWithOptions should not be called for a reply note")
+		return "", nil
+	}
+
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name: "replyId",
+			payload: `{
+				"body": {
+					"note": {
+						"id": "reply-note-1",
+						"text": "Reply note",
+						"visibility": "public",
+						"localOnly": false,
+						"files": [],
+						"cw": null,
+						"replyId": "source-note"
+					}
+				},
+				"server": "https://misskey.example"
+			}`,
+		},
+		{
+			name: "reply object",
+			payload: `{
+				"body": {
+					"note": {
+						"id": "reply-note-2",
+						"text": "Reply note",
+						"visibility": "public",
+						"localOnly": false,
+						"files": [],
+						"cw": null,
+						"reply": {
+							"id": "source-note"
+						}
+					}
+				},
+				"server": "https://misskey.example"
+			}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
+			m := metrics.NewNoop()
+
+			if err := Note2TweetHandler(ctx, []byte(tt.payload), crossPostTracker, m); err != nil {
+				t.Fatalf("Note2TweetHandler() error = %v", err)
+			}
+			if got := testutil.ToFloat64(m.Note2TweetSkipped.WithLabelValues("reply")); got != 1 {
+				t.Fatalf("reply skipped metric = %v, want 1", got)
+			}
+		})
 	}
 }
 

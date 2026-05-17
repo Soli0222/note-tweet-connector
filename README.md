@@ -244,6 +244,7 @@ twurl -H api.x.com \
 - `User-Agent`に`Misskey-Hooks`を含まないリクエストは拒否します。
 - `X-Misskey-Hook-Secret`が`-misskey-hook-secret`と一致しないリクエストは拒否します。
 - `visibility`が`public`ではないノート、`localOnly`のノート、CrossPostTrackerに登録済みのノートはスキップします。
+- `replyId`または`reply`があるリプライノートはスキップします。
 - `RT @`で始まるノートは転送ループ抑止のためスキップします。
 - CW付きノートはCW、本文長に応じたマスク、元ノートURLをTweet本文にします。
 - 画像ファイルは最大4件までTwitterへアップロードします。取得元URLはHTTPSかつ`-misskey-media-host`と一致する必要があります。
@@ -255,6 +256,7 @@ twurl -H api.x.com \
 - `x-twitter-webhooks-signature`を`-twitter-webhook-consumer-secret`で検証します。
 - Twitter webhookのPOSTを受信した時点でログを出し、転送対象の`tweet_create_events`がないpayloadもログと`tweet2note_skipped_total{reason="no_eligible_tweets"}`で記録します。
 - CrossPostTrackerに登録済みのtweetはスキップします。
+- `in_reply_to_status_id_str`があるリプライtweetはスキップします。
 - `RN [at]`で始まるtweetは転送ループ抑止のためスキップします。
 - `RT @`で始まるtweetは元tweet URLを本文末尾に追記します。
 - photoメディアは最大4件までMisskey Driveへアップロードし、ノートに添付します。取得元URLはHTTPSかつ`-twitter-media-hosts`に含まれる必要があります。

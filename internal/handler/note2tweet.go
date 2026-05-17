@@ -31,11 +31,15 @@ type payloadNoteData struct {
 			Cw         string        `json:"cw"`
 			Text       string        `json:"text"`
 			RenoteID   string        `json:"renoteId"`
+			ReplyID    string        `json:"replyId"`
 			User       struct {
 				ID       string `json:"id"`
 				Host     string `json:"host"`
 				Username string `json:"username"`
 			} `json:"user"`
+			Reply struct {
+				ID string `json:"id"`
+			} `json:"reply"`
 			Renote struct {
 				ID     string `json:"id"`
 				UserID string `json:"userId"`
@@ -101,6 +105,14 @@ func Note2TweetHandlerWithConfig(ctx context.Context, cfg Config, data []byte, c
 			slog.String("note_id", noteID),
 			slog.Bool("local_only", payload.Body.Note.LocalOnly))
 		m.Note2TweetSkipped.WithLabelValues("local_only").Inc()
+		return nil
+	}
+
+	if replyID := noteReplyID(payload); replyID != "" {
+		slog.Info("Note is a reply, skipping",
+			slog.String("note_id", noteID),
+			slog.String("reply_id", replyID))
+		m.Note2TweetSkipped.WithLabelValues("reply").Inc()
 		return nil
 	}
 
@@ -237,6 +249,13 @@ func noteRenoteSameAuthor(payload *payloadNoteData) bool {
 		return payload.Body.Note.User.ID == payload.Body.Note.Renote.User.ID
 	}
 	return false
+}
+
+func noteReplyID(payload *payloadNoteData) string {
+	if payload.Body.Note.ReplyID != "" {
+		return payload.Body.Note.ReplyID
+	}
+	return payload.Body.Note.Reply.ID
 }
 
 func resolveTweetIDForMisskeyNote(ctx context.Context, crossPostTracker tracker.CrossPostTracker, noteID string) (string, bool, error) {

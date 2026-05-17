@@ -293,6 +293,31 @@ func TestParseAccountActivityPayload(t *testing.T) {
 			},
 		},
 		{
+			name: "extract reply metadata",
+			payload: `{
+				"for_user_id": "111",
+				"tweet_create_events": [
+					{
+						"id_str": "123456789",
+						"text": "reply text",
+						"in_reply_to_status_id_str": "987654321",
+						"user": {
+							"id_str": "111",
+							"screen_name": "dummy_user"
+						}
+					}
+				]
+			}`,
+			check: func(t *testing.T, tweets []IncomingTweet) {
+				if len(tweets) != 1 {
+					t.Fatalf("expected 1 tweet, got %d", len(tweets))
+				}
+				if tweets[0].InReplyToTweetID != "987654321" {
+					t.Fatalf("InReplyToTweetID = %q, want 987654321", tweets[0].InReplyToTweetID)
+				}
+			},
+		},
+		{
 			name:    "invalid JSON",
 			payload: `{invalid json}`,
 			wantErr: true,
@@ -526,6 +551,41 @@ func TestTweet2NoteHandler_KnownCrossPostDetection(t *testing.T) {
 	err := Tweet2NoteHandlerWithConfig(ctx, testHandlerConfig(), []byte(payload), crossPostTracker, m)
 	if err != nil {
 		t.Errorf("Tweet2NoteHandler() should not return error for known cross-post, got %v", err)
+	}
+}
+
+func TestTweet2NoteHandler_SkipsReply(t *testing.T) {
+	ctx := context.Background()
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
+	m := metrics.NewNoop()
+
+	oldCreate := createMisskeyNoteWithOptions
+	defer func() { createMisskeyNoteWithOptions = oldCreate }()
+	createMisskeyNoteWithOptions = func(ctx context.Context, host, token string, options misskey.CreateNoteOptions) (string, error) {
+		t.Fatal("CreateNoteWithOptions should not be called for a reply tweet")
+		return "", nil
+	}
+
+	payload := `{
+		"for_user_id": "111",
+		"tweet_create_events": [
+			{
+				"id_str": "333",
+				"text": "Reply tweet",
+				"in_reply_to_status_id_str": "222",
+				"user": {
+					"id_str": "111",
+					"screen_name": "dummy_user"
+				}
+			}
+		]
+	}`
+
+	if err := Tweet2NoteHandlerWithConfig(ctx, testHandlerConfig(), []byte(payload), crossPostTracker, m); err != nil {
+		t.Fatalf("Tweet2NoteHandler() error = %v", err)
+	}
+	if got := testutil.ToFloat64(m.Tweet2NoteSkipped.WithLabelValues("reply")); got != 1 {
+		t.Fatalf("reply skipped metric = %v, want 1", got)
 	}
 }
 
