@@ -18,11 +18,12 @@ import (
 )
 
 const (
-	UploadMediaEndpoint = "https://api.x.com/2/media/upload"
 	ManageTweetEndpoint = "https://api.twitter.com/2/tweets"
 	mediaChunkSize      = 4 * 1024 * 1024
 	maxMediaStatusPolls = 30
 )
+
+var UploadMediaEndpoint = "https://api.x.com/2/media/upload"
 
 // httpClient is a reusable HTTP client with timeout
 var httpClient = &http.Client{
@@ -54,12 +55,17 @@ type PostOptions struct {
 }
 
 type Config struct {
-	APIKey            string
-	APIKeySecret      string
-	AccessToken       string
-	AccessTokenSecret string
-	UserAccessToken   string
-	MisskeyMediaHost  string
+	APIKey             string
+	APIKeySecret       string
+	AccessToken        string
+	AccessTokenSecret  string
+	UserAccessToken    string
+	UserRefreshToken   string
+	OAuth2ClientID     string
+	OAuth2ClientSecret string
+	TokenStorePath     string
+	BearerTokenSource  BearerTokenSource
+	MisskeyMediaHost   string
 }
 
 // validateMediaURL validates that the media URL is from an allowed host
@@ -91,10 +97,26 @@ func (cfg Config) validate() error {
 	if cfg.APIKey == "" || cfg.APIKeySecret == "" || cfg.AccessToken == "" || cfg.AccessTokenSecret == "" {
 		return fmt.Errorf("missing Twitter API credentials")
 	}
-	if cfg.UserAccessToken == "" {
-		return fmt.Errorf("twitter user access token is not configured")
-	}
 	return nil
+}
+
+func (cfg Config) bearerTokenSource() (BearerTokenSource, error) {
+	if cfg.BearerTokenSource != nil {
+		return cfg.BearerTokenSource, nil
+	}
+	if cfg.UserRefreshToken != "" && cfg.OAuth2ClientID != "" {
+		return NewTokenManager(OAuth2Config{
+			ClientID:       cfg.OAuth2ClientID,
+			ClientSecret:   cfg.OAuth2ClientSecret,
+			AccessToken:    cfg.UserAccessToken,
+			RefreshToken:   cfg.UserRefreshToken,
+			TokenStorePath: cfg.TokenStorePath,
+		})
+	}
+	if cfg.UserAccessToken != "" {
+		return StaticBearerTokenSource{Token: cfg.UserAccessToken}, nil
+	}
+	return nil, fmt.Errorf("twitter OAuth 2.0 bearer token source is not configured")
 }
 
 // Post posts a tweet via Twitter API.
@@ -244,7 +266,12 @@ func uploadMediaFromURL(ctx context.Context, cfg Config, fileURL string) (string
 		return "", err
 	}
 
-	mediaID, err := initMediaUpload(ctx, cfg.UserAccessToken, mediaType, mediaCategory, len(mediaBytes))
+	tokenSource, err := cfg.bearerTokenSource()
+	if err != nil {
+		return "", err
+	}
+
+	mediaID, err := initMediaUpload(ctx, tokenSource, mediaType, mediaCategory, len(mediaBytes))
 	if err != nil {
 		return "", err
 	}
@@ -254,19 +281,19 @@ func uploadMediaFromURL(ctx context.Context, cfg Config, fileURL string) (string
 		if end > len(mediaBytes) {
 			end = len(mediaBytes)
 		}
-		if err := appendMediaUpload(ctx, cfg.UserAccessToken, mediaID, segmentIndex, mediaBytes[offset:end]); err != nil {
+		if err := appendMediaUpload(ctx, tokenSource, mediaID, segmentIndex, mediaBytes[offset:end]); err != nil {
 			return "", err
 		}
 	}
 
-	if err := finalizeMediaUpload(ctx, cfg.UserAccessToken, mediaID); err != nil {
+	if err := finalizeMediaUpload(ctx, tokenSource, mediaID); err != nil {
 		return "", err
 	}
 
 	return mediaID, nil
 }
 
-func initMediaUpload(ctx context.Context, bearerToken, mediaType, mediaCategory string, totalBytes int) (string, error) {
+func initMediaUpload(ctx context.Context, tokenSource BearerTokenSource, mediaType, mediaCategory string, totalBytes int) (string, error) {
 	fields := map[string]string{
 		"command":        "INIT",
 		"media_type":     mediaType,
@@ -275,7 +302,7 @@ func initMediaUpload(ctx context.Context, bearerToken, mediaType, mediaCategory 
 	}
 
 	var uploadResponse UploadMediaResponse
-	if err := postMediaForm(ctx, bearerToken, fields, "", nil, &uploadResponse); err != nil {
+	if err := postMediaForm(ctx, tokenSource, fields, "", nil, &uploadResponse); err != nil {
 		return "", err
 	}
 	if uploadResponse.Data.ID == "" {
@@ -284,32 +311,32 @@ func initMediaUpload(ctx context.Context, bearerToken, mediaType, mediaCategory 
 	return uploadResponse.Data.ID, nil
 }
 
-func appendMediaUpload(ctx context.Context, bearerToken, mediaID string, segmentIndex int, mediaBytes []byte) error {
+func appendMediaUpload(ctx context.Context, tokenSource BearerTokenSource, mediaID string, segmentIndex int, mediaBytes []byte) error {
 	fields := map[string]string{
 		"command":       "APPEND",
 		"media_id":      mediaID,
 		"segment_index": fmt.Sprintf("%d", segmentIndex),
 	}
-	return postMediaForm(ctx, bearerToken, fields, "media", mediaBytes, nil)
+	return postMediaForm(ctx, tokenSource, fields, "media", mediaBytes, nil)
 }
 
-func finalizeMediaUpload(ctx context.Context, bearerToken, mediaID string) error {
+func finalizeMediaUpload(ctx context.Context, tokenSource BearerTokenSource, mediaID string) error {
 	fields := map[string]string{
 		"command":  "FINALIZE",
 		"media_id": mediaID,
 	}
 
 	var uploadResponse UploadMediaResponse
-	if err := postMediaForm(ctx, bearerToken, fields, "", nil, &uploadResponse); err != nil {
+	if err := postMediaForm(ctx, tokenSource, fields, "", nil, &uploadResponse); err != nil {
 		return err
 	}
 	if uploadResponse.Data.ProcessingInfo == nil {
 		return nil
 	}
-	return waitForMediaProcessing(ctx, bearerToken, mediaID, uploadResponse.Data.ProcessingInfo)
+	return waitForMediaProcessing(ctx, tokenSource, mediaID, uploadResponse.Data.ProcessingInfo)
 }
 
-func waitForMediaProcessing(ctx context.Context, bearerToken, mediaID string, processingInfo *ProcessingInfo) error {
+func waitForMediaProcessing(ctx context.Context, tokenSource BearerTokenSource, mediaID string, processingInfo *ProcessingInfo) error {
 	for i := 0; i < maxMediaStatusPolls; i++ {
 		switch processingInfo.State {
 		case "succeeded":
@@ -323,32 +350,36 @@ func waitForMediaProcessing(ctx context.Context, bearerToken, mediaID string, pr
 			wait = time.Second
 		}
 
-		timer := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
+		var respBytes []byte
+		var statusCode int
+		var err error
+		for attempt := 0; attempt < 2; attempt++ {
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
 
-		statusURL := UploadMediaEndpoint + "?command=STATUS&media_id=" + url.QueryEscape(mediaID)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, statusURL, nil)
-		if err != nil {
-			return err
+			statusCode, respBytes, err = getMediaUploadStatus(ctx, tokenSource, mediaID)
+			if err != nil {
+				return err
+			}
+			if statusCode == http.StatusUnauthorized && attempt == 0 {
+				refresher, ok := tokenSource.(ForceRefreshBearerTokenSource)
+				if ok {
+					if err := refresher.Refresh(ctx); err != nil {
+						return err
+					}
+					wait = 0
+					continue
+				}
+			}
+			break
 		}
-		req.Header.Set("Authorization", "Bearer "+bearerToken)
-
-		resp, err := httpClient.Do(req)
-		if err != nil {
-			return err
-		}
-		respBytes, readErr := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		if readErr != nil {
-			return readErr
-		}
-		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-			return fmt.Errorf("media STATUS failed with status %d: %s", resp.StatusCode, string(respBytes))
+		if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
+			return fmt.Errorf("media STATUS failed with status %d: %s", statusCode, string(respBytes))
 		}
 
 		var uploadResponse UploadMediaResponse
@@ -364,7 +395,31 @@ func waitForMediaProcessing(ctx context.Context, bearerToken, mediaID string, pr
 	return fmt.Errorf("media processing did not complete after %d polls", maxMediaStatusPolls)
 }
 
-func postMediaForm(ctx context.Context, bearerToken string, fields map[string]string, fileField string, fileBytes []byte, responseBody interface{}) error {
+func getMediaUploadStatus(ctx context.Context, tokenSource BearerTokenSource, mediaID string) (int, []byte, error) {
+	statusURL := UploadMediaEndpoint + "?command=STATUS&media_id=" + url.QueryEscape(mediaID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, statusURL, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	bearerToken, err := tokenSource.BearerToken(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+bearerToken)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	respBytes, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return 0, nil, readErr
+	}
+	return resp.StatusCode, respBytes, nil
+}
+
+func postMediaForm(ctx context.Context, tokenSource BearerTokenSource, fields map[string]string, fileField string, fileBytes []byte, responseBody interface{}) error {
 	bodyBuffer := &bytes.Buffer{}
 	writer := multipart.NewWriter(bodyBuffer)
 
@@ -388,26 +443,46 @@ func postMediaForm(ctx context.Context, bearerToken string, fields map[string]st
 		return err
 	}
 
-	uploadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, UploadMediaEndpoint, bodyBuffer)
-	if err != nil {
-		return err
-	}
-	uploadReq.Header.Set("Authorization", "Bearer "+bearerToken)
-	uploadReq.Header.Set("Content-Type", writer.FormDataContentType())
+	bodyBytes := bodyBuffer.Bytes()
+	contentType := writer.FormDataContentType()
 
-	uploadResp, err := httpClient.Do(uploadReq)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = uploadResp.Body.Close() }()
+	var respBytes []byte
+	for attempt := 0; attempt < 2; attempt++ {
+		bearerToken, err := tokenSource.BearerToken(ctx)
+		if err != nil {
+			return err
+		}
 
-	respBytes, err := io.ReadAll(uploadResp.Body)
-	if err != nil {
-		return err
-	}
+		uploadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, UploadMediaEndpoint, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return err
+		}
+		uploadReq.Header.Set("Authorization", "Bearer "+bearerToken)
+		uploadReq.Header.Set("Content-Type", contentType)
 
-	if uploadResp.StatusCode < http.StatusOK || uploadResp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("media upload request failed with status %d: %s", uploadResp.StatusCode, string(respBytes))
+		uploadResp, err := httpClient.Do(uploadReq)
+		if err != nil {
+			return err
+		}
+		respBytes, err = io.ReadAll(uploadResp.Body)
+		_ = uploadResp.Body.Close()
+		if err != nil {
+			return err
+		}
+
+		if uploadResp.StatusCode == http.StatusUnauthorized && attempt == 0 {
+			refresher, ok := tokenSource.(ForceRefreshBearerTokenSource)
+			if ok {
+				if err := refresher.Refresh(ctx); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if uploadResp.StatusCode < http.StatusOK || uploadResp.StatusCode >= http.StatusMultipleChoices {
+			return fmt.Errorf("media upload request failed with status %d: %s", uploadResp.StatusCode, string(respBytes))
+		}
+		break
 	}
 
 	if responseBody == nil || len(respBytes) == 0 {

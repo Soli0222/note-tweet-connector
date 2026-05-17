@@ -51,6 +51,10 @@ type Config struct {
 	TwitterAccessToken           string
 	TwitterAccessTokenSecret     string
 	TwitterUserAccessToken       string
+	TwitterUserRefreshToken      string
+	TwitterOAuth2ClientID        string
+	TwitterOAuth2ClientSecret    string
+	TwitterTokenStorePath        string
 	TwitterWebhookConsumerSecret string
 	TwitterUsername              string
 }
@@ -76,7 +80,11 @@ func parseFlags() *Config {
 	flag.StringVar(&cfg.TwitterAPIKeySecret, "twitter-api-key-secret", "", "Twitter API key secret")
 	flag.StringVar(&cfg.TwitterAccessToken, "twitter-access-token", "", "Twitter access token")
 	flag.StringVar(&cfg.TwitterAccessTokenSecret, "twitter-access-token-secret", "", "Twitter access token secret")
-	flag.StringVar(&cfg.TwitterUserAccessToken, "twitter-user-access-token", "", "Twitter OAuth 2.0 user access token")
+	flag.StringVar(&cfg.TwitterUserAccessToken, "twitter-user-access-token", "", "Twitter OAuth 2.0 user access token; optional when refresh token is configured")
+	flag.StringVar(&cfg.TwitterUserRefreshToken, "twitter-user-refresh-token", "", "Twitter OAuth 2.0 user refresh token")
+	flag.StringVar(&cfg.TwitterOAuth2ClientID, "twitter-oauth2-client-id", "", "Twitter OAuth 2.0 client ID")
+	flag.StringVar(&cfg.TwitterOAuth2ClientSecret, "twitter-oauth2-client-secret", "", "Twitter OAuth 2.0 client secret")
+	flag.StringVar(&cfg.TwitterTokenStorePath, "twitter-token-store-path", "data/twitter_oauth2_token.json", "Path to JSON file for refreshed Twitter OAuth 2.0 tokens")
 	flag.StringVar(&cfg.TwitterWebhookConsumerSecret, "twitter-webhook-consumer-secret", "", "Twitter webhook consumer secret; defaults to twitter-api-key-secret")
 	flag.StringVar(&cfg.TwitterUsername, "twitter-username", "", "Fallback Twitter username")
 
@@ -103,7 +111,6 @@ func (cfg *Config) validate() error {
 		"-twitter-api-key-secret":      cfg.TwitterAPIKeySecret,
 		"-twitter-access-token":        cfg.TwitterAccessToken,
 		"-twitter-access-token-secret": cfg.TwitterAccessTokenSecret,
-		"-twitter-user-access-token":   cfg.TwitterUserAccessToken,
 	}
 	for name, value := range required {
 		if value == "" {
@@ -117,24 +124,55 @@ func (cfg *Config) validate() error {
 	if cfg.TwitterWebhookConsumerSecret == "" {
 		cfg.TwitterWebhookConsumerSecret = cfg.TwitterAPIKeySecret
 	}
+	if cfg.TwitterUserRefreshToken == "" && cfg.TwitterUserAccessToken == "" {
+		return fmt.Errorf("missing required flags: -twitter-user-refresh-token or -twitter-user-access-token")
+	}
+	if cfg.TwitterUserRefreshToken != "" && cfg.TwitterOAuth2ClientID == "" {
+		return fmt.Errorf("missing required flags: -twitter-oauth2-client-id")
+	}
+	if cfg.TwitterUserRefreshToken == "" {
+		slog.Warn("Twitter OAuth 2.0 refresh token is not configured; user access token expiry will not be recoverable")
+	}
 	return nil
 }
 
-func (cfg *Config) handlerConfig() handler.Config {
+func (cfg *Config) handlerConfig() (handler.Config, error) {
+	bearerTokenSource, err := cfg.twitterBearerTokenSource()
+	if err != nil {
+		return handler.Config{}, err
+	}
 	return handler.Config{
 		MisskeyHost:              cfg.MisskeyHost,
 		MisskeyToken:             cfg.MisskeyToken,
 		TwitterUsername:          cfg.TwitterUsername,
 		TwitterMediaAllowedHosts: misskey.ParseAllowedHosts(cfg.TwitterMediaHosts),
 		Twitter: twitter.Config{
-			APIKey:            cfg.TwitterAPIKey,
-			APIKeySecret:      cfg.TwitterAPIKeySecret,
-			AccessToken:       cfg.TwitterAccessToken,
-			AccessTokenSecret: cfg.TwitterAccessTokenSecret,
-			UserAccessToken:   cfg.TwitterUserAccessToken,
-			MisskeyMediaHost:  cfg.MisskeyMediaHost,
+			APIKey:             cfg.TwitterAPIKey,
+			APIKeySecret:       cfg.TwitterAPIKeySecret,
+			AccessToken:        cfg.TwitterAccessToken,
+			AccessTokenSecret:  cfg.TwitterAccessTokenSecret,
+			UserAccessToken:    cfg.TwitterUserAccessToken,
+			UserRefreshToken:   cfg.TwitterUserRefreshToken,
+			OAuth2ClientID:     cfg.TwitterOAuth2ClientID,
+			OAuth2ClientSecret: cfg.TwitterOAuth2ClientSecret,
+			TokenStorePath:     cfg.TwitterTokenStorePath,
+			BearerTokenSource:  bearerTokenSource,
+			MisskeyMediaHost:   cfg.MisskeyMediaHost,
 		},
+	}, nil
+}
+
+func (cfg *Config) twitterBearerTokenSource() (twitter.BearerTokenSource, error) {
+	if cfg.TwitterUserRefreshToken != "" {
+		return twitter.NewTokenManager(twitter.OAuth2Config{
+			ClientID:       cfg.TwitterOAuth2ClientID,
+			ClientSecret:   cfg.TwitterOAuth2ClientSecret,
+			AccessToken:    cfg.TwitterUserAccessToken,
+			RefreshToken:   cfg.TwitterUserRefreshToken,
+			TokenStorePath: cfg.TwitterTokenStorePath,
+		})
 	}
+	return twitter.StaticBearerTokenSource{Token: cfg.TwitterUserAccessToken}, nil
 }
 
 func setupLogger(level string) {
@@ -385,10 +423,16 @@ func main() {
 	updateTrackerEntriesMetric(ctx, crossPostTracker, m)
 	go periodicTrackerEntriesMetric(ctx, crossPostTracker, m)
 
+	handlerCfg, err := cfg.handlerConfig()
+	if err != nil {
+		slog.Error("Failed to initialize Twitter OAuth 2.0 token source", slog.Any("error", err))
+		os.Exit(1)
+	}
+
 	s := &server{
 		crossPostTracker: crossPostTracker,
 		metrics:          m,
-		cfg:              cfg.handlerConfig(),
+		cfg:              handlerCfg,
 		misskeySecret:    cfg.MisskeyHookSecret,
 		twitterSecret:    cfg.TwitterWebhookConsumerSecret,
 	}
