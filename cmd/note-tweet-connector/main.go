@@ -29,14 +29,15 @@ const version = "2.0.2"
 
 // Config holds the application configuration
 type Config struct {
-	Port            string
-	MetricsPort     string
-	TrackerExpiry   time.Duration
-	ReadTimeout     time.Duration
-	WriteTimeout    time.Duration
-	IdleTimeout     time.Duration
-	ShutdownTimeout time.Duration
-	LogLevel        string
+	Port             string
+	MetricsPort      string
+	TrackerDBPath    string
+	TrackerRetention time.Duration
+	ReadTimeout      time.Duration
+	WriteTimeout     time.Duration
+	IdleTimeout      time.Duration
+	ShutdownTimeout  time.Duration
+	LogLevel         string
 }
 
 func parseFlags() *Config {
@@ -44,7 +45,8 @@ func parseFlags() *Config {
 
 	flag.StringVar(&cfg.Port, "port", "8080", "Server port")
 	flag.StringVar(&cfg.MetricsPort, "metrics-port", "9090", "Metrics server port")
-	flag.DurationVar(&cfg.TrackerExpiry, "tracker-expiry", 5*time.Hour, "Duration to keep processed content in tracker")
+	flag.StringVar(&cfg.TrackerDBPath, "tracker-db-path", "data/tracker.sqlite", "Path to sqlite database for the cross-post tracker")
+	flag.DurationVar(&cfg.TrackerRetention, "tracker-retention", 90*24*time.Hour, "Duration to keep tracker records before pruning; non-positive keeps records indefinitely")
 	flag.DurationVar(&cfg.ReadTimeout, "read-timeout", 15*time.Second, "HTTP read timeout")
 	flag.DurationVar(&cfg.WriteTimeout, "write-timeout", 15*time.Second, "HTTP write timeout")
 	flag.DurationVar(&cfg.IdleTimeout, "idle-timeout", 60*time.Second, "HTTP idle timeout")
@@ -63,6 +65,19 @@ func parseFlags() *Config {
 	// Environment variable override for port (for backward compatibility)
 	if envPort := os.Getenv("PORT"); envPort != "" {
 		cfg.Port = envPort
+	}
+	if envTrackerDBPath := os.Getenv("TRACKER_DB_PATH"); envTrackerDBPath != "" {
+		cfg.TrackerDBPath = envTrackerDBPath
+	}
+	if envTrackerRetention := os.Getenv("TRACKER_RETENTION"); envTrackerRetention != "" {
+		retention, err := time.ParseDuration(envTrackerRetention)
+		if err != nil {
+			slog.Warn("Invalid TRACKER_RETENTION, using configured value",
+				slog.String("tracker_retention", envTrackerRetention),
+				slog.Any("error", err))
+		} else {
+			cfg.TrackerRetention = retention
+		}
 	}
 
 	return cfg
@@ -90,7 +105,7 @@ func setupLogger(level string) {
 }
 
 type server struct {
-	crossPostTracker *tracker.CrossPostTracker
+	crossPostTracker tracker.CrossPostTracker
 	metrics          *metrics.Metrics
 }
 
@@ -263,12 +278,35 @@ Version: ` + version
 	fmt.Println(banner)
 }
 
-func main() {
-	cfg := parseFlags()
+func periodicTrackerEntriesMetric(ctx context.Context, crossPostTracker tracker.CrossPostTracker, m *metrics.Metrics) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
 
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			updateTrackerEntriesMetric(ctx, crossPostTracker, m)
+		}
+	}
+}
+
+func updateTrackerEntriesMetric(ctx context.Context, crossPostTracker tracker.CrossPostTracker, m *metrics.Metrics) {
+	count, err := crossPostTracker.Count(ctx)
+	if err != nil {
+		slog.Error("Failed to count cross-post tracker records", slog.Any("error", err))
+		return
+	}
+	m.TrackerEntriesTotal.Set(float64(count))
+}
+
+func main() {
 	if err := godotenv.Load(); err != nil {
 		slog.Warn(".env file not found, using environment variables")
 	}
+
+	cfg := parseFlags()
 
 	setupLogger(cfg.LogLevel)
 
@@ -280,7 +318,18 @@ func main() {
 	// Initialize metrics
 	m := metrics.New(version)
 
-	crossPostTracker := tracker.NewCrossPostTracker(ctx, cfg.TrackerExpiry)
+	crossPostTracker, err := tracker.NewSQLiteCrossPostTracker(ctx, cfg.TrackerDBPath, cfg.TrackerRetention)
+	if err != nil {
+		slog.Error("Failed to initialize cross-post tracker", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer func() {
+		if err := crossPostTracker.Close(); err != nil {
+			slog.Error("Failed to close cross-post tracker", slog.Any("error", err))
+		}
+	}()
+	updateTrackerEntriesMetric(ctx, crossPostTracker, m)
+	go periodicTrackerEntriesMetric(ctx, crossPostTracker, m)
 
 	s := &server{
 		crossPostTracker: crossPostTracker,
@@ -345,6 +394,8 @@ func main() {
 		slog.String("version", version),
 		slog.String("port", cfg.Port),
 		slog.String("metrics_port", cfg.MetricsPort),
+		slog.String("tracker_db_path", cfg.TrackerDBPath),
+		slog.Duration("tracker_retention", cfg.TrackerRetention),
 		slog.String("log_level", cfg.LogLevel))
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

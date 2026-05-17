@@ -23,16 +23,21 @@ func TestCrossPostTracker_RememberMisskeyToTweet(t *testing.T) {
 	defer cancel()
 
 	tracker := NewCrossPostTracker(ctx, 1*time.Hour)
-	tracker.RememberMisskeyToTweet("note-1", "tweet-1")
+	if err := tracker.RememberMisskeyToTweet(ctx, "note-1", "tweet-1"); err != nil {
+		t.Fatalf("RememberMisskeyToTweet() error = %v", err)
+	}
 
-	if !tracker.HasMisskeyNote("note-1") {
+	if ok, err := tracker.HasMisskeyNote(ctx, "note-1"); err != nil || !ok {
 		t.Fatal("HasMisskeyNote() = false, want true")
 	}
-	if !tracker.HasTweet("tweet-1") {
+	if ok, err := tracker.HasTweet(ctx, "tweet-1"); err != nil || !ok {
 		t.Fatal("HasTweet() = false, want true")
 	}
 
-	record, ok := tracker.FindByMisskeyNoteID("note-1")
+	record, ok, err := tracker.FindByMisskeyNoteID(ctx, "note-1")
+	if err != nil {
+		t.Fatalf("FindByMisskeyNoteID() error = %v", err)
+	}
 	if !ok {
 		t.Fatal("FindByMisskeyNoteID() did not find record")
 	}
@@ -49,16 +54,21 @@ func TestCrossPostTracker_RememberTweetToMisskey(t *testing.T) {
 	defer cancel()
 
 	tracker := NewCrossPostTracker(ctx, 1*time.Hour)
-	tracker.RememberTweetToMisskey("tweet-2", "note-2")
+	if err := tracker.RememberTweetToMisskey(ctx, "tweet-2", "note-2"); err != nil {
+		t.Fatalf("RememberTweetToMisskey() error = %v", err)
+	}
 
-	if !tracker.HasTweet("tweet-2") {
+	if ok, err := tracker.HasTweet(ctx, "tweet-2"); err != nil || !ok {
 		t.Fatal("HasTweet() = false, want true")
 	}
-	if !tracker.HasMisskeyNote("note-2") {
+	if ok, err := tracker.HasMisskeyNote(ctx, "note-2"); err != nil || !ok {
 		t.Fatal("HasMisskeyNote() = false, want true")
 	}
 
-	record, ok := tracker.FindByTweetID("tweet-2")
+	record, ok, err := tracker.FindByTweetID(ctx, "tweet-2")
+	if err != nil {
+		t.Fatalf("FindByTweetID() error = %v", err)
+	}
 	if !ok {
 		t.Fatal("FindByTweetID() did not find record")
 	}
@@ -75,37 +85,49 @@ func TestCrossPostTracker_EmptyIDsAreIgnored(t *testing.T) {
 	defer cancel()
 
 	tracker := NewCrossPostTracker(ctx, 1*time.Hour)
-	tracker.RememberMisskeyToTweet("", "tweet-1")
-	tracker.RememberMisskeyToTweet("note-1", "")
-	tracker.RememberTweetToMisskey("", "note-2")
-	tracker.RememberTweetToMisskey("tweet-2", "")
+	if err := tracker.RememberMisskeyToTweet(ctx, "", "tweet-1"); err != nil {
+		t.Fatalf("RememberMisskeyToTweet() error = %v", err)
+	}
+	if err := tracker.RememberMisskeyToTweet(ctx, "note-1", ""); err != nil {
+		t.Fatalf("RememberMisskeyToTweet() error = %v", err)
+	}
+	if err := tracker.RememberTweetToMisskey(ctx, "", "note-2"); err != nil {
+		t.Fatalf("RememberTweetToMisskey() error = %v", err)
+	}
+	if err := tracker.RememberTweetToMisskey(ctx, "tweet-2", ""); err != nil {
+		t.Fatalf("RememberTweetToMisskey() error = %v", err)
+	}
 
-	if tracker.HasMisskeyNote("note-1") {
+	if ok, err := tracker.HasMisskeyNote(ctx, "note-1"); err != nil || ok {
 		t.Fatal("empty tweet ID record should not be stored")
 	}
-	if tracker.HasTweet("tweet-1") {
+	if ok, err := tracker.HasTweet(ctx, "tweet-1"); err != nil || ok {
 		t.Fatal("empty note ID record should not be stored")
 	}
-	if tracker.HasMisskeyNote("note-2") {
+	if ok, err := tracker.HasMisskeyNote(ctx, "note-2"); err != nil || ok {
 		t.Fatal("empty tweet ID record should not be stored")
 	}
-	if tracker.HasTweet("tweet-2") {
+	if ok, err := tracker.HasTweet(ctx, "tweet-2"); err != nil || ok {
 		t.Fatal("empty note ID record should not be stored")
 	}
 }
 
-func TestCrossPostTracker_CleanupExpired(t *testing.T) {
+func TestCrossPostTracker_PruneRetention(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	tracker := NewCrossPostTracker(ctx, 50*time.Millisecond)
-	tracker.RememberMisskeyToTweet("note-old", "tweet-old")
-	tracker.cleanupExpired(time.Now().Add(1 * time.Hour))
+	if err := tracker.RememberMisskeyToTweet(ctx, "note-old", "tweet-old"); err != nil {
+		t.Fatalf("RememberMisskeyToTweet() error = %v", err)
+	}
+	if _, err := tracker.Prune(ctx, time.Now().Add(1*time.Hour)); err != nil {
+		t.Fatalf("Prune() error = %v", err)
+	}
 
-	if tracker.HasMisskeyNote("note-old") {
+	if ok, err := tracker.HasMisskeyNote(ctx, "note-old"); err != nil || ok {
 		t.Fatal("expired Misskey note record should be removed")
 	}
-	if tracker.HasTweet("tweet-old") {
+	if ok, err := tracker.HasTweet(ctx, "tweet-old"); err != nil || ok {
 		t.Fatal("expired tweet record should be removed")
 	}
 }
@@ -123,11 +145,13 @@ func TestCrossPostTracker_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			noteID := fmt.Sprintf("note-%d", i)
 			tweetID := fmt.Sprintf("tweet-%d", i)
-			tracker.RememberMisskeyToTweet(noteID, tweetID)
-			if !tracker.HasMisskeyNote(noteID) {
+			if err := tracker.RememberMisskeyToTweet(ctx, noteID, tweetID); err != nil {
+				t.Errorf("RememberMisskeyToTweet() error = %v", err)
+			}
+			if ok, err := tracker.HasMisskeyNote(ctx, noteID); err != nil || !ok {
 				t.Errorf("HasMisskeyNote(%q) = false, want true", noteID)
 			}
-			if !tracker.HasTweet(tweetID) {
+			if ok, err := tracker.HasTweet(ctx, tweetID); err != nil || !ok {
 				t.Errorf("HasTweet(%q) = false, want true", tweetID)
 			}
 		}(i)

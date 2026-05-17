@@ -368,10 +368,10 @@ func TestHandleIncomingTweet_WithMedia(t *testing.T) {
 	if !reflect.DeepEqual(gotFileIDs, wantFileIDs) {
 		t.Fatalf("fileIDs = %#v, want %#v", gotFileIDs, wantFileIDs)
 	}
-	if !crossPostTracker.HasTweet("123") {
+	if ok, err := crossPostTracker.HasTweet(ctx, "123"); err != nil || !ok {
 		t.Fatal("tweet ID was not recorded")
 	}
-	if !crossPostTracker.HasMisskeyNote("note-123") {
+	if ok, err := crossPostTracker.HasMisskeyNote(ctx, "note-123"); err != nil || !ok {
 		t.Fatal("note ID was not recorded")
 	}
 }
@@ -379,7 +379,9 @@ func TestHandleIncomingTweet_WithMedia(t *testing.T) {
 func TestHandleIncomingTweet_QuoteTweetUsesTrackerNoteID(t *testing.T) {
 	ctx := context.Background()
 	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
-	crossPostTracker.RememberMisskeyToTweet("source-note", "source-tweet")
+	if err := crossPostTracker.RememberMisskeyToTweet(ctx, "source-note", "source-tweet"); err != nil {
+		t.Fatalf("RememberMisskeyToTweet() error = %v", err)
+	}
 	m := metrics.NewNoop()
 
 	t.Setenv("MISSKEY_HOST", "misskey.example")
@@ -417,7 +419,15 @@ func TestHandleIncomingTweet_QuoteTweetUsesTrackerNoteID(t *testing.T) {
 	if gotOptions.RenoteID != "source-note" {
 		t.Fatalf("RenoteID = %q, want source-note", gotOptions.RenoteID)
 	}
-	if !crossPostTracker.HasTweet("quote-tweet") || !crossPostTracker.HasMisskeyNote("quote-note") {
+	hasTweet, err := crossPostTracker.HasTweet(ctx, "quote-tweet")
+	if err != nil {
+		t.Fatalf("HasTweet() error = %v", err)
+	}
+	hasNote, err := crossPostTracker.HasMisskeyNote(ctx, "quote-note")
+	if err != nil {
+		t.Fatalf("HasMisskeyNote() error = %v", err)
+	}
+	if !hasTweet || !hasNote {
 		t.Fatal("quote cross-post IDs were not recorded")
 	}
 }
@@ -497,7 +507,9 @@ func TestTweet2NoteHandler_KnownCrossPostDetection(t *testing.T) {
 	t.Setenv("MISSKEY_HOST", "misskey.example")
 	t.Setenv("MISSKEY_TOKEN", "test-token")
 
-	crossPostTracker.RememberMisskeyToTweet("note-222", "222")
+	if err := crossPostTracker.RememberMisskeyToTweet(ctx, "note-222", "222"); err != nil {
+		t.Fatalf("RememberMisskeyToTweet() error = %v", err)
+	}
 
 	payload := `{
 		"for_user_id": "111",
