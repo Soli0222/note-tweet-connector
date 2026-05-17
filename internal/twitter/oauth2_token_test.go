@@ -201,6 +201,30 @@ func TestPostMediaFormRefreshesAndRetriesOnUnauthorized(t *testing.T) {
 	}
 }
 
+func TestPostMediaFormForbiddenErrorIncludesUploadContext(t *testing.T) {
+	ctx := context.Background()
+	source := StaticBearerTokenSource{Token: "access-token"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"title":"Forbidden","detail":"Forbidden"}`))
+	}))
+	defer server.Close()
+
+	oldEndpoint := UploadMediaEndpoint
+	UploadMediaEndpoint = server.URL
+	defer func() { UploadMediaEndpoint = oldEndpoint }()
+
+	err := postMediaForm(ctx, source, map[string]string{"command": "INIT"}, "", nil, nil)
+	if err == nil {
+		t.Fatal("postMediaForm() succeeded, want error")
+	}
+	for _, want := range []string{"media upload INIT failed with status 403", "tweet.write", "Media API access"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("postMediaForm() error = %q, want substring %q", err.Error(), want)
+		}
+	}
+}
+
 func TestTokenManagerRedactsKnownTokensFromRefreshErrors(t *testing.T) {
 	ctx := context.Background()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

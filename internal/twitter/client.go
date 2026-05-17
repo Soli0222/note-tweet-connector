@@ -480,7 +480,7 @@ func postMediaForm(ctx context.Context, tokenSource BearerTokenSource, fields ma
 			}
 		}
 		if uploadResp.StatusCode < http.StatusOK || uploadResp.StatusCode >= http.StatusMultipleChoices {
-			return fmt.Errorf("media upload request failed with status %d: %s", uploadResp.StatusCode, string(respBytes))
+			return mediaUploadRequestError(fields["command"], uploadResp.StatusCode, respBytes)
 		}
 		break
 	}
@@ -492,6 +492,17 @@ func postMediaForm(ctx context.Context, tokenSource BearerTokenSource, fields ma
 		return fmt.Errorf("failed to parse media upload response: %w", err)
 	}
 	return nil
+}
+
+func mediaUploadRequestError(command string, statusCode int, respBytes []byte) error {
+	detail := previewBody(respBytes)
+	if command == "" {
+		command = "request"
+	}
+	if statusCode == http.StatusForbidden {
+		return fmt.Errorf("media upload %s failed with status %d: %s; verify the Twitter OAuth 2.0 user token was authorized with tweet.write and offline.access scopes and that the developer app has Media API access", command, statusCode, detail)
+	}
+	return fmt.Errorf("media upload %s failed with status %d: %s", command, statusCode, detail)
 }
 
 func mediaCategoryForType(mediaType string) (string, error) {
