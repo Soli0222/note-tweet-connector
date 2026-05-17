@@ -138,9 +138,8 @@ func TestUploadDriveFileFromURL(t *testing.T) {
 	defer func() { httpClient = oldClient }()
 
 	host := strings.TrimPrefix(server.URL, "https://")
-	t.Setenv("TWITTER_MEDIA_HOSTS", host)
 
-	gotID, err := UploadDriveFileFromURL(context.Background(), host, "test-token", server.URL+"/media/sample.png")
+	gotID, err := UploadDriveFileFromURLWithAllowedHosts(context.Background(), host, "test-token", server.URL+"/media/sample.png", []string{host})
 	if err != nil {
 		t.Fatalf("UploadDriveFileFromURL() error = %v", err)
 	}
@@ -156,8 +155,6 @@ func TestUploadDriveFileFromURL(t *testing.T) {
 }
 
 func TestValidateTwitterMediaURL(t *testing.T) {
-	t.Setenv("TWITTER_MEDIA_HOSTS", "pbs.twimg.com,video.twimg.com")
-
 	tests := []struct {
 		name    string
 		url     string
@@ -171,7 +168,7 @@ func TestValidateTwitterMediaURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateTwitterMediaURL(tt.url)
+			err := validateTwitterMediaURL(tt.url, []string{"pbs.twimg.com", "video.twimg.com"})
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("validateTwitterMediaURL() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -191,9 +188,8 @@ func TestUploadDriveFileFromURLRejectsNonImage(t *testing.T) {
 	defer func() { httpClient = oldClient }()
 
 	host := strings.TrimPrefix(server.URL, "https://")
-	t.Setenv("TWITTER_MEDIA_HOSTS", host)
 
-	_, err := UploadDriveFileFromURL(context.Background(), host, "test-token", server.URL+"/media/sample.txt")
+	_, err := UploadDriveFileFromURLWithAllowedHosts(context.Background(), host, "test-token", server.URL+"/media/sample.txt", []string{host})
 	if err == nil {
 		t.Fatal("UploadDriveFileFromURL() expected error for non-image response")
 	}

@@ -8,9 +8,7 @@ import (
 )
 
 func TestTwitterResponseToken(t *testing.T) {
-	t.Setenv("TWITTER_WEBHOOK_CONSUMER_SECRET", "secret")
-
-	got, err := twitterResponseToken("challenge")
+	got, err := twitterResponseToken("challenge", "secret")
 	if err != nil {
 		t.Fatalf("twitterResponseToken() error = %v", err)
 	}
@@ -25,14 +23,12 @@ func TestTwitterResponseToken(t *testing.T) {
 }
 
 func TestVerifyTwitterSignature(t *testing.T) {
-	t.Setenv("TWITTER_WEBHOOK_CONSUMER_SECRET", "secret")
-
 	body := []byte(`{"tweet_create_events":[]}`)
 	mac := hmac.New(sha256.New, []byte("secret"))
 	_, _ = mac.Write(body)
 	signature := "sha256=" + base64.StdEncoding.EncodeToString(mac.Sum(nil))
 
-	ok, err := verifyTwitterSignature(body, signature)
+	ok, err := verifyTwitterSignature(body, signature, "secret")
 	if err != nil {
 		t.Fatalf("verifyTwitterSignature() error = %v", err)
 	}
@@ -40,7 +36,7 @@ func TestVerifyTwitterSignature(t *testing.T) {
 		t.Fatal("verifyTwitterSignature() = false, want true")
 	}
 
-	ok, err = verifyTwitterSignature(body, "sha256=invalid")
+	ok, err = verifyTwitterSignature(body, "sha256=invalid", "secret")
 	if err != nil {
 		t.Fatalf("verifyTwitterSignature() error = %v", err)
 	}

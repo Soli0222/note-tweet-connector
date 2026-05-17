@@ -659,8 +659,6 @@ func TestNote2TweetHandler_InvalidJSON(t *testing.T) {
 }
 
 func TestNote2TweetHandler_RenoteHandling(t *testing.T) {
-	t.Setenv("MISSKEY_HOST", "misskey.example")
-
 	payload := `{
 		"body": {
 			"note": {

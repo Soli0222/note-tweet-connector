@@ -67,14 +67,11 @@ func TestMediaTypeFromURL(t *testing.T) {
 	}
 }
 
-func TestLoadTwitterUserAccessToken(t *testing.T) {
-	t.Setenv("TWITTER_USER_ACCESS_TOKEN", "token")
-
-	got, err := loadTwitterUserAccessToken()
-	if err != nil {
-		t.Fatalf("loadTwitterUserAccessToken() error = %v", err)
+func TestValidateMediaURL(t *testing.T) {
+	if err := validateMediaURL("https://media.example/image.png", "media.example"); err != nil {
+		t.Fatalf("validateMediaURL() error = %v", err)
 	}
-	if got != "token" {
-		t.Fatalf("loadTwitterUserAccessToken() = %q, want token", got)
+	if err := validateMediaURL("https://other.example/image.png", "media.example"); err == nil {
+		t.Fatal("validateMediaURL() expected host error")
 	}
 }

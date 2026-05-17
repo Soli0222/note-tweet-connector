@@ -4,7 +4,6 @@ go 1.26.3
 
 require (
 	github.com/dghubble/oauth1 v0.7.3
-	github.com/joho/godotenv v1.5.1
 	github.com/prometheus/client_golang v1.23.2
 	modernc.org/sqlite v1.50.1
 )
