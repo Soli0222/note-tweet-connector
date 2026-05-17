@@ -116,6 +116,14 @@ func Note2TweetHandlerWithConfig(ctx context.Context, cfg Config, data []byte, c
 		return nil
 	}
 
+	if renoteID := noteRenoteID(payload); renoteID != "" && !isOwnQuoteRenote(payload) {
+		slog.Info("Note is a renote, skipping",
+			slog.String("note_id", noteID),
+			slog.String("renote_id", renoteID))
+		m.Note2TweetSkipped.WithLabelValues("renote").Inc()
+		return nil
+	}
+
 	noteText := payload.Body.Note.Text
 	noteURI := payload.Server + "/notes/" + payload.Body.Note.ID
 	quoteTweetID := ""
@@ -123,42 +131,29 @@ func Note2TweetHandlerWithConfig(ctx context.Context, cfg Config, data []byte, c
 	if payload.Body.Note.Cw != "" {
 		circles := strings.Repeat("○", len(payload.Body.Note.Text))
 		noteText = payload.Body.Note.Cw + "\n" + circles + "\n" + noteURI
-	} else if isQuoteRenote(payload) {
-		if noteRenoteSameAuthor(payload) {
-			renoteID := payload.Body.Note.RenoteID
-			if renoteID == "" {
-				renoteID = payload.Body.Note.Renote.ID
-			}
-			resolvedTweetID, ok, err := resolveTweetIDForMisskeyNote(ctx, crossPostTracker, renoteID)
-			if err != nil {
-				slog.Error("Failed to resolve quote renote source from tracker",
-					slog.String("note_id", noteID),
-					slog.String("renote_id", renoteID),
-					slog.Any("error", err))
-				m.Note2TweetErrors.Inc()
-				return err
-			}
-			if ok {
-				quoteTweetID = resolvedTweetID
-			} else {
-				slog.Info("Quote renote source not found in tracker",
-					slog.String("note_id", noteID),
-					slog.String("renote_id", renoteID))
-			}
-		} else {
-			slog.Info("Quote renote author mismatch, falling back to text",
+	} else if isOwnQuoteRenote(payload) {
+		renoteID := noteRenoteID(payload)
+		resolvedTweetID, ok, err := resolveTweetIDForMisskeyNote(ctx, crossPostTracker, renoteID)
+		if err != nil {
+			slog.Error("Failed to resolve quote renote source from tracker",
 				slog.String("note_id", noteID),
-				slog.String("renote_id", payload.Body.Note.RenoteID))
+				slog.String("renote_id", renoteID),
+				slog.Any("error", err))
+			m.Note2TweetErrors.Inc()
+			return err
+		}
+		if ok {
+			quoteTweetID = resolvedTweetID
+		} else {
+			slog.Info("Quote renote source not found in tracker",
+				slog.String("note_id", noteID),
+				slog.String("renote_id", renoteID))
 		}
 	}
 
 	if noteText == "" || noteText == "null" {
 		if len(payload.Body.Note.Files) == 0 {
-			renoteHost := payload.Body.Note.Renote.User.Host
-			if renoteHost == "" {
-				renoteHost = cfg.MisskeyHost
-			}
-			noteText = "RN [at]" + payload.Body.Note.Renote.User.Username + "[at]" + renoteHost + "\n\n" + payload.Body.Note.Renote.Text + "\n\n" + payload.Body.Note.Renote.URI
+			noteText = noteURI
 		}
 	}
 
@@ -234,14 +229,27 @@ func Note2TweetHandlerWithConfig(ctx context.Context, cfg Config, data []byte, c
 	return nil
 }
 
-func isQuoteRenote(payload *payloadNoteData) bool {
+func noteReplyID(payload *payloadNoteData) string {
+	if payload.Body.Note.ReplyID != "" {
+		return payload.Body.Note.ReplyID
+	}
+	return payload.Body.Note.Reply.ID
+}
+
+func noteRenoteID(payload *payloadNoteData) string {
+	if payload.Body.Note.RenoteID != "" {
+		return payload.Body.Note.RenoteID
+	}
+	return payload.Body.Note.Renote.ID
+}
+
+func isOwnQuoteRenote(payload *payloadNoteData) bool {
 	if payload.Body.Note.Text == "" || payload.Body.Note.Text == "null" {
 		return false
 	}
-	return payload.Body.Note.RenoteID != "" || payload.Body.Note.Renote.ID != ""
-}
-
-func noteRenoteSameAuthor(payload *payloadNoteData) bool {
+	if noteRenoteID(payload) == "" {
+		return false
+	}
 	if payload.Body.Note.UserID != "" && payload.Body.Note.Renote.UserID != "" {
 		return payload.Body.Note.UserID == payload.Body.Note.Renote.UserID
 	}
@@ -249,13 +257,6 @@ func noteRenoteSameAuthor(payload *payloadNoteData) bool {
 		return payload.Body.Note.User.ID == payload.Body.Note.Renote.User.ID
 	}
 	return false
-}
-
-func noteReplyID(payload *payloadNoteData) string {
-	if payload.Body.Note.ReplyID != "" {
-		return payload.Body.Note.ReplyID
-	}
-	return payload.Body.Note.Reply.ID
 }
 
 func resolveTweetIDForMisskeyNote(ctx context.Context, crossPostTracker tracker.CrossPostTracker, noteID string) (string, bool, error) {

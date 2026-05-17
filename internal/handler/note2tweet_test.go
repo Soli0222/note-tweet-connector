@@ -327,11 +327,9 @@ func TestNote2TweetHandler_SkipsReply(t *testing.T) {
 
 	oldPost := postTweet
 	oldPostWithMedia := postTweetWithMedia
-	oldPostWithOptions := postTweetWithOptions
 	defer func() {
 		postTweet = oldPost
 		postTweetWithMedia = oldPostWithMedia
-		postTweetWithOptions = oldPostWithOptions
 	}()
 
 	postTweet = func(ctx context.Context, text string) (string, error) {
@@ -340,10 +338,6 @@ func TestNote2TweetHandler_SkipsReply(t *testing.T) {
 	}
 	postTweetWithMedia = func(ctx context.Context, text string, fileURLs []string) (string, error) {
 		t.Fatal("PostWithMedia should not be called for a reply note")
-		return "", nil
-	}
-	postTweetWithOptions = func(ctx context.Context, options twitter.PostOptions) (string, error) {
-		t.Fatal("PostWithOptions should not be called for a reply note")
 		return "", nil
 	}
 
@@ -454,7 +448,111 @@ func TestNote2TweetHandler_RecordsCrossPostIDs(t *testing.T) {
 	}
 }
 
-func TestNote2TweetHandler_QuoteRenoteUsesTrackerTweetID(t *testing.T) {
+func TestNote2TweetHandler_SkipsPlainAndExternalQuoteRenotes(t *testing.T) {
+	ctx := context.Background()
+
+	oldPost := postTweet
+	oldPostWithMedia := postTweetWithMedia
+	oldPostWithOptions := postTweetWithOptions
+	defer func() {
+		postTweet = oldPost
+		postTweetWithMedia = oldPostWithMedia
+		postTweetWithOptions = oldPostWithOptions
+	}()
+
+	postTweet = func(ctx context.Context, text string) (string, error) {
+		t.Fatal("Post should not be called for a renote")
+		return "", nil
+	}
+	postTweetWithMedia = func(ctx context.Context, text string, fileURLs []string) (string, error) {
+		t.Fatal("PostWithMedia should not be called for a renote")
+		return "", nil
+	}
+	postTweetWithOptions = func(ctx context.Context, options twitter.PostOptions) (string, error) {
+		t.Fatal("PostWithOptions should not be called for a skipped renote")
+		return "", nil
+	}
+
+	tests := []struct {
+		name    string
+		noteID  string
+		payload string
+	}{
+		{
+			name:   "plain renote",
+			noteID: "renote-note",
+			payload: `{
+				"body": {
+					"note": {
+						"id": "renote-note",
+						"text": null,
+						"visibility": "public",
+						"localOnly": false,
+						"files": [],
+						"cw": null,
+						"renoteId": "source-note",
+						"renote": {
+							"id": "source-note",
+							"text": "source text"
+						}
+					}
+				},
+				"server": "https://misskey.example"
+			}`,
+		},
+		{
+			name:   "external quote renote",
+			noteID: "quote-note",
+			payload: `{
+				"body": {
+					"note": {
+						"id": "quote-note",
+						"userId": "user-1",
+						"text": "My quote text",
+						"visibility": "public",
+						"localOnly": false,
+						"files": [],
+						"cw": null,
+						"renoteId": "source-note",
+						"renote": {
+							"id": "source-note",
+							"userId": "user-2",
+							"text": "source text",
+							"user": {
+								"id": "user-2",
+								"username": "other"
+							}
+						},
+						"user": {
+							"id": "user-1",
+							"username": "dummy"
+						}
+					}
+				},
+				"server": "https://misskey.example"
+			}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
+			m := metrics.NewNoop()
+
+			if err := Note2TweetHandler(ctx, []byte(tt.payload), crossPostTracker, m); err != nil {
+				t.Fatalf("Note2TweetHandler() error = %v", err)
+			}
+			if got := testutil.ToFloat64(m.Note2TweetSkipped.WithLabelValues("renote")); got != 1 {
+				t.Fatalf("renote skipped metric = %v, want 1", got)
+			}
+			if ok, err := crossPostTracker.HasMisskeyNote(ctx, tt.noteID); err != nil || ok {
+				t.Fatal("renote note ID should not be recorded")
+			}
+		})
+	}
+}
+
+func TestNote2TweetHandler_OwnQuoteRenoteUsesTrackerTweetID(t *testing.T) {
 	ctx := context.Background()
 	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	if err := crossPostTracker.RememberMisskeyToTweet(ctx, "source-note", "source-tweet"); err != nil {
@@ -472,11 +570,11 @@ func TestNote2TweetHandler_QuoteRenoteUsesTrackerTweetID(t *testing.T) {
 	}()
 
 	postTweet = func(ctx context.Context, text string) (string, error) {
-		t.Fatal("Post should not be called for quote renote")
+		t.Fatal("Post should not be called for an own quote renote with a tracker hit")
 		return "", nil
 	}
 	postTweetWithMedia = func(ctx context.Context, text string, fileURLs []string) (string, error) {
-		t.Fatal("PostWithMedia should not be called for quote renote")
+		t.Fatal("PostWithMedia should not be called for an own quote renote with a tracker hit")
 		return "", nil
 	}
 
@@ -525,75 +623,14 @@ func TestNote2TweetHandler_QuoteRenoteUsesTrackerTweetID(t *testing.T) {
 	if gotOptions.QuoteTweetID != "source-tweet" {
 		t.Fatalf("QuoteTweetID = %q, want source-tweet", gotOptions.QuoteTweetID)
 	}
-	hasNote, err := crossPostTracker.HasMisskeyNote(ctx, "quote-note")
-	if err != nil {
-		t.Fatalf("HasMisskeyNote() error = %v", err)
+	if got := testutil.ToFloat64(m.Note2TweetSkipped.WithLabelValues("renote")); got != 0 {
+		t.Fatalf("renote skipped metric = %v, want 0", got)
 	}
-	hasTweet, err := crossPostTracker.HasTweet(ctx, "quote-tweet")
-	if err != nil {
-		t.Fatalf("HasTweet() error = %v", err)
+	if ok, err := crossPostTracker.HasMisskeyNote(ctx, "quote-note"); err != nil || !ok {
+		t.Fatal("quote note ID should be recorded")
 	}
-	if !hasNote || !hasTweet {
-		t.Fatal("quote cross-post IDs were not recorded")
-	}
-}
-
-func TestNote2TweetHandler_QuoteRenoteFallsBackWhenTrackerMiss(t *testing.T) {
-	ctx := context.Background()
-	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
-	m := metrics.NewNoop()
-
-	oldPost := postTweet
-	oldPostWithOptions := postTweetWithOptions
-	defer func() {
-		postTweet = oldPost
-		postTweetWithOptions = oldPostWithOptions
-	}()
-
-	var gotText string
-	postTweet = func(ctx context.Context, text string) (string, error) {
-		gotText = text
-		return "tweet-fallback", nil
-	}
-	postTweetWithOptions = func(ctx context.Context, options twitter.PostOptions) (string, error) {
-		t.Fatal("PostWithOptions should not be called when quote source is not in tracker")
-		return "", nil
-	}
-
-	payload := `{
-		"body": {
-			"note": {
-				"id": "quote-note",
-				"userId": "user-1",
-				"text": "My quote text",
-				"visibility": "public",
-				"localOnly": false,
-				"files": [],
-				"cw": null,
-				"renoteId": "missing-source-note",
-				"renote": {
-					"id": "missing-source-note",
-					"userId": "user-1",
-					"text": "source text",
-					"user": {
-						"id": "user-1",
-						"username": "dummy"
-					}
-				},
-				"user": {
-					"id": "user-1",
-					"username": "dummy"
-				}
-			}
-		},
-		"server": "https://misskey.example"
-	}`
-
-	if err := Note2TweetHandler(ctx, []byte(payload), crossPostTracker, m); err != nil {
-		t.Fatalf("Note2TweetHandler() error = %v", err)
-	}
-	if gotText != "My quote text" {
-		t.Fatalf("posted text = %q, want My quote text", gotText)
+	if ok, err := crossPostTracker.HasTweet(ctx, "quote-tweet"); err != nil || !ok {
+		t.Fatal("quote tweet ID should be recorded")
 	}
 }
 
