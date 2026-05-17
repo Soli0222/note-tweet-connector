@@ -61,6 +61,8 @@ jobs:
           push: true
           platforms: ${{ matrix.platform }}
           provenance: false
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

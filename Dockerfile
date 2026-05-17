@@ -2,13 +2,15 @@ FROM golang:1.26.3-alpine3.22 AS builder
 
 WORKDIR /app
 
+ARG VERSION=dev
+
 COPY go.mod .
 COPY go.sum .
 RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o note-tweet-connector ./cmd/note-tweet-connector/
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VERSION}" -o note-tweet-connector ./cmd/note-tweet-connector/
 
 FROM alpine:3.23
 
