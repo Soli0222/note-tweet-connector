@@ -257,6 +257,7 @@ func (s *server) twitterWebhookHandler(w http.ResponseWriter, r *http.Request) {
 			s.metrics.WebhookRequestErrors.WithLabelValues("twitter", "read_body").Inc()
 			return
 		}
+		slog.Info("Received Twitter webhook request", slog.Int("body_size", len(body)))
 
 		signature := r.Header.Get("x-twitter-webhooks-signature")
 		if ok, err := verifyTwitterSignature(body, signature, s.twitterSecret); err != nil || !ok {
