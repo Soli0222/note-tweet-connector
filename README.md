@@ -87,7 +87,7 @@ Docker Composeを使用してコンテナを起動します。
 docker compose up -d
 ```
 
-CrossPostTrackerのsqlite DBはデフォルトでコンテナ内の`/app/data/tracker.sqlite`に作成されます。`docker-compose.yaml`では`./data:/app/data`をマウントしているため、コンテナを再作成してもTrackerの対応関係は保持されます。
+CrossPostTrackerのsqlite DBはデフォルトでコンテナ内の`/app/data/tracker.sqlite`に作成されます。`compose.yaml`では`./data:/app/data`をマウントしているため、コンテナを再作成してもTrackerの対応関係は保持されます。
 
 ###　Kubernetesを使用した起動
 
