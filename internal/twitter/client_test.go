@@ -26,6 +26,109 @@ func TestTweetBodyIncludesQuoteTweetID(t *testing.T) {
 	}
 }
 
+func TestPostWithOptionsConfigUsesOAuth2BearerToken(t *testing.T) {
+	ctx := context.Background()
+	var sawRequest bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawRequest = true
+		if got := r.Method; got != http.MethodPost {
+			t.Fatalf("method = %q, want POST", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer access-token" {
+			t.Fatalf("Authorization = %q, want Bearer access-token", got)
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("Content-Type = %q, want application/json", got)
+		}
+		var body struct {
+			Text         string `json:"text"`
+			QuoteTweetID string `json:"quote_tweet_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if body.Text != "hello" {
+			t.Fatalf("text = %q, want hello", body.Text)
+		}
+		if body.QuoteTweetID != "quote-1" {
+			t.Fatalf("quote_tweet_id = %q, want quote-1", body.QuoteTweetID)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"data":{"id":"tweet-1"}}`))
+	}))
+	defer server.Close()
+
+	oldClient := httpClient
+	httpClient = server.Client()
+	defer func() { httpClient = oldClient }()
+
+	oldEndpoint := ManageTweetEndpoint
+	ManageTweetEndpoint = server.URL
+	defer func() { ManageTweetEndpoint = oldEndpoint }()
+
+	tweetID, err := PostWithOptionsConfig(ctx, Config{
+		BearerTokenSource: StaticBearerTokenSource{Token: "access-token"},
+	}, PostOptions{
+		Text:         "hello",
+		MediaURLs:    nil,
+		QuoteTweetID: "quote-1",
+	})
+	if err != nil {
+		t.Fatalf("PostWithOptionsConfig() error = %v", err)
+	}
+	if tweetID != "tweet-1" {
+		t.Fatalf("tweetID = %q, want tweet-1", tweetID)
+	}
+	if !sawRequest {
+		t.Fatal("tweet endpoint was not called")
+	}
+}
+
+func TestPostWithOptionsConfigRefreshesAndRetriesOnUnauthorized(t *testing.T) {
+	ctx := context.Background()
+	source := &recordingTokenSource{token: "old-token"}
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch r.Header.Get("Authorization") {
+		case "Bearer old-token":
+			http.Error(w, "expired", http.StatusUnauthorized)
+		case "Bearer new-token":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"tweet-1"}}`))
+		default:
+			t.Fatalf("unexpected Authorization header %q", r.Header.Get("Authorization"))
+		}
+	}))
+	defer server.Close()
+
+	oldClient := httpClient
+	httpClient = server.Client()
+	defer func() { httpClient = oldClient }()
+
+	oldEndpoint := ManageTweetEndpoint
+	ManageTweetEndpoint = server.URL
+	defer func() { ManageTweetEndpoint = oldEndpoint }()
+
+	tweetID, err := PostWithOptionsConfig(ctx, Config{
+		BearerTokenSource: source,
+	}, PostOptions{Text: "hello"})
+	if err != nil {
+		t.Fatalf("PostWithOptionsConfig() error = %v", err)
+	}
+	if tweetID != "tweet-1" {
+		t.Fatalf("tweetID = %q, want tweet-1", tweetID)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+	if source.refreshes != 1 {
+		t.Fatalf("refreshes = %d, want 1", source.refreshes)
+	}
+}
+
 func TestMediaCategoryForType(t *testing.T) {
 	tests := []struct {
 		mediaType string

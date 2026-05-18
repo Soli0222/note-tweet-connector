@@ -14,18 +14,18 @@ import (
 	"path"
 	"strings"
 	"time"
-
-	"github.com/dghubble/oauth1"
 )
 
 const (
-	ManageTweetEndpoint       = "https://api.twitter.com/2/tweets"
 	mediaChunkSize            = 4 * 1024 * 1024
 	maxSimpleImageUploadBytes = 5 * 1024 * 1024
 	maxMediaStatusPolls       = 30
 )
 
-var UploadMediaEndpoint = "https://api.x.com/2/media/upload"
+var (
+	ManageTweetEndpoint = "https://api.twitter.com/2/tweets"
+	UploadMediaEndpoint = "https://api.x.com/2/media/upload"
+)
 
 // httpClient is a reusable HTTP client with timeout
 var httpClient = &http.Client{
@@ -57,10 +57,6 @@ type PostOptions struct {
 }
 
 type Config struct {
-	APIKey            string
-	APIKeySecret      string
-	AccessToken       string
-	AccessTokenSecret string
 	OAuth2ClientID    string
 	OAuth2RedirectURL string
 	TokenStorePath    string
@@ -94,8 +90,11 @@ func validateMediaURL(fileURL, mediaHost string) error {
 }
 
 func (cfg Config) validate() error {
-	if cfg.APIKey == "" || cfg.APIKeySecret == "" || cfg.AccessToken == "" || cfg.AccessTokenSecret == "" {
-		return fmt.Errorf("missing Twitter API credentials")
+	if cfg.BearerTokenSource != nil {
+		return nil
+	}
+	if cfg.OAuth2ClientID == "" {
+		return fmt.Errorf("twitter OAuth 2.0 bearer token source is not configured")
 	}
 	return nil
 }
@@ -130,13 +129,9 @@ func PostWithOptions(ctx context.Context, options PostOptions) (string, error) {
 
 func PostWithOptionsConfig(ctx context.Context, cfg Config, options PostOptions) (string, error) {
 	if err := cfg.validate(); err != nil {
-		slog.Error("Error loading Twitter API keys", slog.Any("error", err))
+		slog.Error("Error loading Twitter OAuth 2.0 token source", slog.Any("error", err))
 		return "", err
 	}
-
-	config := oauth1.NewConfig(cfg.APIKey, cfg.APIKeySecret)
-	token := oauth1.NewToken(cfg.AccessToken, cfg.AccessTokenSecret)
-	oauthClient := config.Client(ctx, token)
 
 	limit := len(options.MediaURLs)
 	if limit > 4 {
@@ -152,7 +147,11 @@ func PostWithOptionsConfig(ctx context.Context, cfg Config, options PostOptions)
 		mediaIDs = append(mediaIDs, mediaID)
 	}
 
-	return postTweet(ctx, oauthClient, options.Text, mediaIDs, options.QuoteTweetID)
+	tokenSource, err := cfg.bearerTokenSource()
+	if err != nil {
+		return "", err
+	}
+	return postTweet(ctx, tokenSource, options.Text, mediaIDs, options.QuoteTweetID)
 }
 
 func tweetBody(text string, mediaIDs []string, quoteTweetID string) map[string]interface{} {
@@ -168,7 +167,7 @@ func tweetBody(text string, mediaIDs []string, quoteTweetID string) map[string]i
 	return tweetBodyMap
 }
 
-func postTweet(ctx context.Context, oauthClient *http.Client, text string, mediaIDs []string, quoteTweetID string) (string, error) {
+func postTweet(ctx context.Context, tokenSource BearerTokenSource, text string, mediaIDs []string, quoteTweetID string) (string, error) {
 	tweetBodyMap := tweetBody(text, mediaIDs, quoteTweetID)
 	tweetBody, err := json.Marshal(tweetBodyMap)
 	if err != nil {
@@ -176,28 +175,49 @@ func postTweet(ctx context.Context, oauthClient *http.Client, text string, media
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", ManageTweetEndpoint, bytes.NewBuffer(tweetBody))
-	if err != nil {
-		slog.Error("Error creating tweet request", slog.Any("error", err))
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
+	var respBytes []byte
+	var statusCode int
+	for attempt := 0; attempt < 2; attempt++ {
+		bearerToken, err := tokenSource.BearerToken(ctx)
+		if err != nil {
+			return "", err
+		}
 
-	resp, err := oauthClient.Do(req)
-	if err != nil {
-		slog.Error("Error sending tweet request", slog.Any("error", err))
-		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, ManageTweetEndpoint, bytes.NewReader(tweetBody))
+		if err != nil {
+			slog.Error("Error creating tweet request", slog.Any("error", err))
+			return "", err
+		}
+		req.Header.Set("Authorization", "Bearer "+bearerToken)
+		req.Header.Set("Content-Type", "application/json")
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		slog.Error("Non-OK response from Twitter", slog.Int("status", resp.StatusCode))
-		return "", fmt.Errorf("twitter POST request failed with status %d", resp.StatusCode)
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			slog.Error("Error sending tweet request", slog.Any("error", err))
+			return "", err
+		}
+		respBytes, err = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			return "", err
+		}
+
+		statusCode = resp.StatusCode
+		if statusCode == http.StatusUnauthorized && attempt == 0 {
+			refresher, ok := tokenSource.(ForceRefreshBearerTokenSource)
+			if ok {
+				if err := refresher.Refresh(ctx); err != nil {
+					return "", err
+				}
+				continue
+			}
+		}
+		break
 	}
 
-	respBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		slog.Error("Non-OK response from Twitter", slog.Int("status", statusCode))
+		return "", fmt.Errorf("twitter POST request failed with status %d: %s", statusCode, previewBody(respBytes))
 	}
 
 	var postResp struct {

@@ -42,10 +42,6 @@ type Config struct {
 	MisskeyToken              string
 	MisskeyMediaHost          string
 	TwitterMediaHosts         string
-	TwitterAPIKey             string
-	TwitterAPIKeySecret       string
-	TwitterAccessToken        string
-	TwitterAccessTokenSecret  string
 	TwitterOAuth2ClientID     string
 	TwitterOAuth2RedirectURL  string
 	TwitterTokenStorePath     string
@@ -72,10 +68,6 @@ func parseFlags() *Config {
 	flag.StringVar(&cfg.MisskeyToken, "misskey-token", "", "Misskey API token")
 	flag.StringVar(&cfg.MisskeyMediaHost, "misskey-media-host", "", "Allowed Misskey media host for Twitter uploads")
 	flag.StringVar(&cfg.TwitterMediaHosts, "twitter-media-hosts", misskey.DefaultTwitterMediaHosts, "Comma-separated allowed Twitter media hosts for Misskey uploads")
-	flag.StringVar(&cfg.TwitterAPIKey, "twitter-api-key", "", "Twitter API key")
-	flag.StringVar(&cfg.TwitterAPIKeySecret, "twitter-api-key-secret", "", "Twitter API key secret")
-	flag.StringVar(&cfg.TwitterAccessToken, "twitter-access-token", "", "Twitter access token")
-	flag.StringVar(&cfg.TwitterAccessTokenSecret, "twitter-access-token-secret", "", "Twitter access token secret")
 	flag.StringVar(&cfg.TwitterOAuth2ClientID, "twitter-oauth2-client-id", "", "Twitter OAuth 2.0 client ID")
 	flag.StringVar(&cfg.TwitterOAuth2RedirectURL, "twitter-oauth2-redirect-url", "", "Twitter OAuth 2.0 redirect URL")
 	flag.StringVar(&cfg.TwitterTokenStorePath, "twitter-token-store-path", "data/twitter_oauth2_token.json", "Path to JSON file for refreshed Twitter OAuth 2.0 tokens")
@@ -99,14 +91,10 @@ func parseFlags() *Config {
 func (cfg *Config) validate() error {
 	var missing []string
 	required := map[string]string{
-		"-misskey-hook-secret":         cfg.MisskeyHookSecret,
-		"-misskey-host":                cfg.MisskeyHost,
-		"-misskey-token":               cfg.MisskeyToken,
-		"-misskey-media-host":          cfg.MisskeyMediaHost,
-		"-twitter-api-key":             cfg.TwitterAPIKey,
-		"-twitter-api-key-secret":      cfg.TwitterAPIKeySecret,
-		"-twitter-access-token":        cfg.TwitterAccessToken,
-		"-twitter-access-token-secret": cfg.TwitterAccessTokenSecret,
+		"-misskey-hook-secret": cfg.MisskeyHookSecret,
+		"-misskey-host":        cfg.MisskeyHost,
+		"-misskey-token":       cfg.MisskeyToken,
+		"-misskey-media-host":  cfg.MisskeyMediaHost,
 	}
 	for name, value := range required {
 		if value == "" {
@@ -145,10 +133,6 @@ func (cfg *Config) handlerConfig(bearerTokenSource twitter.BearerTokenSource) ha
 		TwitterUsername:          cfg.TwitterUsername,
 		TwitterMediaAllowedHosts: misskey.ParseAllowedHosts(cfg.TwitterMediaHosts),
 		Twitter: twitter.Config{
-			APIKey:            cfg.TwitterAPIKey,
-			APIKeySecret:      cfg.TwitterAPIKeySecret,
-			AccessToken:       cfg.TwitterAccessToken,
-			AccessTokenSecret: cfg.TwitterAccessTokenSecret,
 			OAuth2ClientID:    cfg.TwitterOAuth2ClientID,
 			OAuth2RedirectURL: cfg.TwitterOAuth2RedirectURL,
 			TokenStorePath:    cfg.TwitterTokenStorePath,
