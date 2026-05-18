@@ -273,13 +273,17 @@ func parseFilteredStreamPayloadWithConfig(data []byte, cfg Config) ([]IncomingTw
 		username = cfg.TwitterUsername
 	}
 	quotedTweetID, quotedUserID, quotedUsername := filteredStreamQuote(payload)
+	tweetURL := buildTweetURL(username, payload.Data.ID)
+	if retweetURL := filteredStreamRetweetURL(payload); retweetURL != "" {
+		tweetURL = retweetURL
+	}
 
 	return []IncomingTweet{{
 		ID:               payload.Data.ID,
 		Text:             text,
 		UserID:           payload.Data.AuthorID,
 		Username:         username,
-		URL:              buildTweetURL(username, payload.Data.ID),
+		URL:              tweetURL,
 		MediaURLs:        mediaURLs,
 		QuotedTweetID:    quotedTweetID,
 		QuotedUserID:     quotedUserID,
@@ -358,6 +362,25 @@ func filteredStreamQuote(payload filteredStreamPayload) (tweetID, userID, userna
 		}
 	}
 	return tweetID, userID, username
+}
+
+func filteredStreamRetweetURL(payload filteredStreamPayload) string {
+	var retweetedTweetID string
+	for _, ref := range payload.Data.ReferencedTweets {
+		if ref.Type == "retweeted" {
+			retweetedTweetID = ref.ID
+			break
+		}
+	}
+	if retweetedTweetID == "" {
+		return ""
+	}
+	for _, tweet := range payload.Includes.Tweets {
+		if tweet.ID == retweetedTweetID {
+			return buildTweetURL(filteredStreamUsername(payload, tweet.AuthorID), retweetedTweetID)
+		}
+	}
+	return ""
 }
 
 func filteredStreamReplyTweetID(tweet filteredStreamTweet) string {
