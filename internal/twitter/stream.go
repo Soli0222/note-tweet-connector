@@ -71,7 +71,7 @@ func DefaultStreamRule(username string) string {
 	if username == "" {
 		return ""
 	}
-	return "from:" + username + " -is:retweet -is:reply"
+	return "from:" + username + " -is:reply"
 }
 
 func DefaultStreamRuleTag() string {

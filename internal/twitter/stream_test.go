@@ -12,7 +12,7 @@ import (
 )
 
 func TestDefaultStreamRule(t *testing.T) {
-	if got := DefaultStreamRule("dummy_user"); got != "from:dummy_user -is:retweet -is:reply" {
+	if got := DefaultStreamRule("dummy_user"); got != "from:dummy_user -is:reply" {
 		t.Fatalf("DefaultStreamRule() = %q", got)
 	}
 	if got := DefaultStreamRule(""); got != "" {
@@ -31,7 +31,7 @@ func TestEnsureRuleNoopWhenRuleExists(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Fatalf("unexpected method %s", r.Method)
 		}
-		_, _ = w.Write([]byte(`{"data":[{"id":"rule-1","value":"from:dummy_user -is:retweet -is:reply","tag":"note-tweet-connector"}]}`))
+		_, _ = w.Write([]byte(`{"data":[{"id":"rule-1","value":"from:dummy_user -is:reply","tag":"note-tweet-connector"}]}`))
 	}))
 	defer server.Close()
 

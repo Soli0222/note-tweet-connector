@@ -211,6 +211,49 @@ func TestParseFilteredStreamPayload(t *testing.T) {
 			},
 		},
 		{
+			name: "retweet uses referenced tweet URL",
+			payload: `{
+					"data": {
+						"id": "123456789",
+						"text": "RT @other_user: original text",
+						"author_id": "111",
+						"referenced_tweets": [
+							{
+								"type": "retweeted",
+								"id": "987654321"
+							}
+						]
+					},
+					"includes": {
+						"tweets": [
+							{
+								"id": "987654321",
+								"text": "original text",
+								"author_id": "222"
+							}
+						],
+						"users": [
+							{
+								"id": "111",
+								"username": "dummy_user"
+							},
+							{
+								"id": "222",
+								"username": "other_user"
+							}
+						]
+					}
+				}`,
+			check: func(t *testing.T, tweets []IncomingTweet) {
+				if len(tweets) != 1 {
+					t.Fatalf("expected 1 tweet, got %d", len(tweets))
+				}
+				if tweets[0].URL != "https://twitter.com/other_user/status/987654321" {
+					t.Fatalf("URL = %q", tweets[0].URL)
+				}
+			},
+		},
+		{
 			name:    "invalid JSON",
 			payload: `{invalid json}`,
 			wantErr: true,
