@@ -14,8 +14,8 @@ services:
       - -twitter-oauth2-client-id=${TWITTER_OAUTH2_CLIENT_ID:?TWITTER_OAUTH2_CLIENT_ID is required}
       - -twitter-oauth2-redirect-url=${TWITTER_OAUTH2_REDIRECT_URL:?TWITTER_OAUTH2_REDIRECT_URL is required}
       - -twitter-token-store-path=${TWITTER_TOKEN_STORE_PATH:-data/twitter_oauth2_token.json}
-      - -twitter-webhook-consumer-secret=${TWITTER_WEBHOOK_CONSUMER_SECRET:-}
-      - -twitter-username=${TWITTER_USERNAME:-}
+      - -twitter-bearer-token=${TWITTER_BEARER_TOKEN:?TWITTER_BEARER_TOKEN is required}
+      - -twitter-username=${TWITTER_USERNAME:?TWITTER_USERNAME is required}
     ports:
       - "8080:8080"
       - "9090:9090"

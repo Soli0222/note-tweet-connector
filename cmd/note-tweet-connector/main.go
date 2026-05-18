@@ -2,11 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -42,20 +37,22 @@ type Config struct {
 	ShutdownTimeout  time.Duration
 	LogLevel         string
 
-	MisskeyHookSecret            string
-	MisskeyHost                  string
-	MisskeyToken                 string
-	MisskeyMediaHost             string
-	TwitterMediaHosts            string
-	TwitterAPIKey                string
-	TwitterAPIKeySecret          string
-	TwitterAccessToken           string
-	TwitterAccessTokenSecret     string
-	TwitterOAuth2ClientID        string
-	TwitterOAuth2RedirectURL     string
-	TwitterTokenStorePath        string
-	TwitterWebhookConsumerSecret string
-	TwitterUsername              string
+	MisskeyHookSecret         string
+	MisskeyHost               string
+	MisskeyToken              string
+	MisskeyMediaHost          string
+	TwitterMediaHosts         string
+	TwitterAPIKey             string
+	TwitterAPIKeySecret       string
+	TwitterAccessToken        string
+	TwitterAccessTokenSecret  string
+	TwitterOAuth2ClientID     string
+	TwitterOAuth2RedirectURL  string
+	TwitterTokenStorePath     string
+	TwitterBearerToken        string
+	TwitterStreamReconnectMin time.Duration
+	TwitterStreamReconnectMax time.Duration
+	TwitterUsername           string
 }
 
 func parseFlags() *Config {
@@ -82,7 +79,9 @@ func parseFlags() *Config {
 	flag.StringVar(&cfg.TwitterOAuth2ClientID, "twitter-oauth2-client-id", "", "Twitter OAuth 2.0 client ID")
 	flag.StringVar(&cfg.TwitterOAuth2RedirectURL, "twitter-oauth2-redirect-url", "", "Twitter OAuth 2.0 redirect URL")
 	flag.StringVar(&cfg.TwitterTokenStorePath, "twitter-token-store-path", "data/twitter_oauth2_token.json", "Path to JSON file for refreshed Twitter OAuth 2.0 tokens")
-	flag.StringVar(&cfg.TwitterWebhookConsumerSecret, "twitter-webhook-consumer-secret", "", "Twitter webhook consumer secret; defaults to twitter-api-key-secret")
+	flag.StringVar(&cfg.TwitterBearerToken, "twitter-bearer-token", "", "Twitter Application-Only Bearer Token for Filtered Stream")
+	flag.DurationVar(&cfg.TwitterStreamReconnectMin, "twitter-stream-reconnect-min", 5*time.Second, "Minimum Twitter stream reconnect backoff")
+	flag.DurationVar(&cfg.TwitterStreamReconnectMax, "twitter-stream-reconnect-max", 5*time.Minute, "Maximum Twitter stream reconnect backoff")
 	flag.StringVar(&cfg.TwitterUsername, "twitter-username", "", "Fallback Twitter username")
 
 	showVersion := flag.Bool("version", false, "Show version and exit")
@@ -118,14 +117,23 @@ func (cfg *Config) validate() error {
 		sort.Strings(missing)
 		return fmt.Errorf("missing required flags: %s", strings.Join(missing, ", "))
 	}
-	if cfg.TwitterWebhookConsumerSecret == "" {
-		cfg.TwitterWebhookConsumerSecret = cfg.TwitterAPIKeySecret
-	}
 	if cfg.TwitterOAuth2ClientID == "" {
 		return fmt.Errorf("missing required flags: -twitter-oauth2-client-id")
 	}
 	if cfg.TwitterOAuth2RedirectURL == "" {
 		return fmt.Errorf("missing required flags: -twitter-oauth2-redirect-url")
+	}
+	if cfg.TwitterBearerToken == "" {
+		return fmt.Errorf("missing required flags: -twitter-bearer-token")
+	}
+	if cfg.TwitterUsername == "" {
+		return fmt.Errorf("missing required flags: -twitter-username")
+	}
+	if cfg.TwitterStreamReconnectMin <= 0 {
+		return fmt.Errorf("-twitter-stream-reconnect-min must be positive")
+	}
+	if cfg.TwitterStreamReconnectMax < cfg.TwitterStreamReconnectMin {
+		return fmt.Errorf("-twitter-stream-reconnect-max must be greater than or equal to -twitter-stream-reconnect-min")
 	}
 	return nil
 }
@@ -184,7 +192,6 @@ type server struct {
 	metrics          *metrics.Metrics
 	cfg              handler.Config
 	misskeySecret    string
-	twitterSecret    string
 	twitterOAuth2    *twitter.OAuth2LoginManager
 }
 
@@ -257,73 +264,6 @@ func (s *server) webhookHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-}
-
-func (s *server) twitterWebhookHandler(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-
-	switch r.Method {
-	case http.MethodGet:
-		crcToken := r.URL.Query().Get("crc_token")
-		if crcToken == "" {
-			http.Error(w, "Missing crc_token", http.StatusBadRequest)
-			s.metrics.WebhookRequestsTotal.WithLabelValues("twitter_crc", "bad_request").Inc()
-			s.metrics.WebhookRequestErrors.WithLabelValues("twitter_crc", "missing_crc_token").Inc()
-			return
-		}
-
-		responseToken, err := twitterResponseToken(crcToken, s.twitterSecret)
-		if err != nil {
-			http.Error(w, "Twitter webhook secret is not configured", http.StatusInternalServerError)
-			slog.Error("Twitter webhook secret is not configured", slog.Any("error", err))
-			s.metrics.WebhookRequestsTotal.WithLabelValues("twitter_crc", "error").Inc()
-			s.metrics.WebhookRequestErrors.WithLabelValues("twitter_crc", "missing_secret").Inc()
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]string{"response_token": responseToken}); err != nil {
-			slog.Error("Failed to write CRC response", slog.Any("error", err))
-			s.metrics.WebhookRequestsTotal.WithLabelValues("twitter_crc", "error").Inc()
-			s.metrics.WebhookRequestErrors.WithLabelValues("twitter_crc", "write_response").Inc()
-			return
-		}
-
-		s.metrics.WebhookRequestsTotal.WithLabelValues("twitter_crc", "success").Inc()
-		s.metrics.WebhookRequestDuration.WithLabelValues("twitter_crc").Observe(time.Since(start).Seconds())
-	case http.MethodPost:
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "Failed to read request body", http.StatusInternalServerError)
-			slog.Error("Failed to read request body", slog.Any("error", err))
-			s.metrics.WebhookRequestsTotal.WithLabelValues("twitter", "error").Inc()
-			s.metrics.WebhookRequestErrors.WithLabelValues("twitter", "read_body").Inc()
-			return
-		}
-		slog.Info("Received Twitter webhook request", slog.Int("body_size", len(body)))
-
-		signature := r.Header.Get("x-twitter-webhooks-signature")
-		if ok, err := verifyTwitterSignature(body, signature, s.twitterSecret); err != nil || !ok {
-			http.Error(w, "Invalid Twitter signature", http.StatusUnauthorized)
-			slog.Error("Invalid Twitter signature", slog.Any("error", err))
-			s.metrics.WebhookRequestsTotal.WithLabelValues("twitter", "unauthorized").Inc()
-			s.metrics.WebhookRequestErrors.WithLabelValues("twitter", "signature").Inc()
-			return
-		}
-
-		if err := handler.Tweet2NoteHandlerWithConfig(r.Context(), s.cfg, body, s.crossPostTracker, s.metrics); err != nil {
-			http.Error(w, "Failed to handle request", http.StatusInternalServerError)
-			slog.Error("Failed to handle request", slog.Any("error", err))
-			s.metrics.WebhookRequestsTotal.WithLabelValues("twitter", "error").Inc()
-			return
-		}
-
-		s.metrics.WebhookRequestsTotal.WithLabelValues("twitter", "success").Inc()
-		s.metrics.WebhookRequestDuration.WithLabelValues("twitter").Observe(time.Since(start).Seconds())
-		w.WriteHeader(http.StatusOK)
-	default:
-		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
-	}
 }
 
 func (s *server) twitterLoginHandler(w http.ResponseWriter, r *http.Request) {
@@ -409,33 +349,6 @@ func logTwitterOAuth2AuthorizationRequired(login *twitter.OAuth2LoginManager) {
 		slog.Time("expires_at", expiresAt))
 }
 
-func twitterResponseToken(crcToken, secret string) (string, error) {
-	signature, err := twitterHMAC([]byte(crcToken), secret)
-	if err != nil {
-		return "", err
-	}
-	return "sha256=" + signature, nil
-}
-
-func verifyTwitterSignature(body []byte, signature, secret string) (bool, error) {
-	expected, err := twitterHMAC(body, secret)
-	if err != nil {
-		return false, err
-	}
-	want := "sha256=" + expected
-	return subtle.ConstantTimeCompare([]byte(signature), []byte(want)) == 1, nil
-}
-
-func twitterHMAC(message []byte, secret string) (string, error) {
-	if secret == "" {
-		return "", fmt.Errorf("twitter webhook consumer secret must be set")
-	}
-
-	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write(message)
-	return base64.StdEncoding.EncodeToString(mac.Sum(nil)), nil
-}
-
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte("ok\n")); err != nil {
@@ -479,6 +392,91 @@ func updateTrackerEntriesMetric(ctx context.Context, crossPostTracker tracker.Cr
 		return
 	}
 	m.TrackerEntriesTotal.Set(float64(count))
+}
+
+func runTwitterStream(ctx context.Context, streamClient *twitter.StreamClient, cfg handler.Config, crossPostTracker tracker.CrossPostTracker, m *metrics.Metrics, reconnectMin, reconnectMax time.Duration) {
+	backoff := reconnectMin
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		m.TwitterStreamConnects.WithLabelValues("attempt").Inc()
+		err := streamClient.Consume(ctx, func(ctx context.Context, line []byte) error {
+			m.TwitterStreamLastMessageTime.Set(float64(time.Now().Unix()))
+			if err := handler.Tweet2NoteHandlerWithConfig(ctx, cfg, line, crossPostTracker, m); err != nil {
+				m.TwitterStreamMessages.WithLabelValues("error").Inc()
+				slog.Error("Failed to process Twitter stream message", slog.Any("error", err))
+				return nil
+			}
+			m.TwitterStreamMessages.WithLabelValues("success").Inc()
+			return nil
+		})
+		if err == nil || errors.Is(err, context.Canceled) || (errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil) {
+			return
+		}
+
+		reason := twitterStreamDisconnectReason(err)
+		m.TwitterStreamDisconnects.WithLabelValues(reason).Inc()
+		slog.Warn("Twitter stream disconnected",
+			slog.String("reason", reason),
+			slog.Duration("reconnect_after", backoff),
+			slog.Any("error", err))
+
+		sleep := twitterStreamReconnectDelay(err, backoff)
+		if sleep > reconnectMax {
+			sleep = reconnectMax
+		}
+		if !sleepContext(ctx, sleep) {
+			return
+		}
+		if backoff < reconnectMax {
+			backoff *= 2
+			if backoff > reconnectMax {
+				backoff = reconnectMax
+			}
+		}
+	}
+}
+
+func twitterStreamDisconnectReason(err error) string {
+	if errors.Is(err, twitter.ErrStreamKeepAliveTimeout) {
+		return "keep_alive_timeout"
+	}
+	var rateLimitErr *twitter.StreamRateLimitError
+	if errors.As(err, &rateLimitErr) {
+		return "rate_limit"
+	}
+	var httpErr *twitter.StreamHTTPError
+	if errors.As(err, &httpErr) {
+		return fmt.Sprintf("http_%d", httpErr.StatusCode)
+	}
+	if errors.Is(err, io.EOF) {
+		return "eof"
+	}
+	return "error"
+}
+
+func twitterStreamReconnectDelay(err error, fallback time.Duration) time.Duration {
+	var rateLimitErr *twitter.StreamRateLimitError
+	if errors.As(err, &rateLimitErr) && !rateLimitErr.ResetAt.IsZero() {
+		delay := time.Until(rateLimitErr.ResetAt)
+		if delay > 0 {
+			return delay
+		}
+	}
+	return fallback
+}
+
+func sleepContext(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func main() {
@@ -529,13 +527,29 @@ func main() {
 		source: tokenManager,
 		login:  oauth2Login,
 	})
+	streamClient := twitter.NewStreamClient(twitter.StaticBearerTokenSource{Token: cfg.TwitterBearerToken})
+	streamClient.OnConnect = func() {
+		m.TwitterStreamConnects.WithLabelValues("success").Inc()
+		slog.Info("Connected to Twitter Filtered Stream")
+	}
+	streamRule := twitter.DefaultStreamRule(cfg.TwitterUsername)
+	streamRuleTag := twitter.DefaultStreamRuleTag()
+	m.TwitterStreamRuleUpdates.WithLabelValues("ensure", "attempt").Inc()
+	if err := streamClient.EnsureRule(ctx, streamRule, streamRuleTag); err != nil {
+		m.TwitterStreamRuleUpdates.WithLabelValues("ensure", "error").Inc()
+		slog.Error("Failed to ensure Twitter stream rule", slog.Any("error", err))
+		os.Exit(1)
+	}
+	m.TwitterStreamRuleUpdates.WithLabelValues("ensure", "success").Inc()
+	slog.Info("Ensured Twitter stream rule",
+		slog.String("rule", streamRule),
+		slog.String("tag", streamRuleTag))
 
 	s := &server{
 		crossPostTracker: crossPostTracker,
 		metrics:          m,
 		cfg:              handlerCfg,
 		misskeySecret:    cfg.MisskeyHookSecret,
-		twitterSecret:    cfg.TwitterWebhookConsumerSecret,
 		twitterOAuth2:    oauth2Login,
 	}
 
@@ -544,7 +558,6 @@ func main() {
 	mux.HandleFunc("/", s.webhookHandler)
 	mux.HandleFunc("/twitter/login", s.twitterLoginHandler)
 	mux.HandleFunc("/twitter/callback", s.twitterCallbackHandler)
-	mux.HandleFunc("/twitter/webhook", s.twitterWebhookHandler)
 	mux.HandleFunc("/healthz", healthzHandler)
 
 	srv := &http.Server{
@@ -573,6 +586,12 @@ func main() {
 		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("Metrics server error", slog.Any("error", err))
 		}
+	}()
+
+	// Start Twitter stream worker
+	go func() {
+		slog.Info("Starting Twitter Filtered Stream worker")
+		runTwitterStream(ctx, streamClient, handlerCfg, crossPostTracker, m, cfg.TwitterStreamReconnectMin, cfg.TwitterStreamReconnectMax)
 	}()
 
 	// Graceful shutdown

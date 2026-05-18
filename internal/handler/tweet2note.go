@@ -35,44 +35,45 @@ type Config struct {
 	Twitter                  twitter.Config
 }
 
-type accountActivityPayload struct {
-	ForUserID         string        `json:"for_user_id"`
-	TweetCreateEvents []tweetObject `json:"tweet_create_events"`
+type filteredStreamPayload struct {
+	Data     filteredStreamTweet    `json:"data"`
+	Includes filteredStreamIncludes `json:"includes"`
 }
 
-type tweetObject struct {
-	IDStr                string          `json:"id_str"`
-	Text                 string          `json:"text"`
-	FullText             string          `json:"full_text"`
-	Truncated            bool            `json:"truncated"`
-	User                 twitterUser     `json:"user"`
-	Entities             twitterEntities `json:"entities"`
-	ExtendedEntities     twitterEntities `json:"extended_entities"`
-	ExtendedTweet        extendedTweet   `json:"extended_tweet"`
-	QuotedStatusIDStr    string          `json:"quoted_status_id_str"`
-	QuotedStatus         *tweetObject    `json:"quoted_status"`
-	InReplyToStatusIDStr string          `json:"in_reply_to_status_id_str"`
+type filteredStreamTweet struct {
+	ID               string                    `json:"id"`
+	Text             string                    `json:"text"`
+	AuthorID         string                    `json:"author_id"`
+	Attachments      filteredStreamAttachment  `json:"attachments"`
+	ReferencedTweets []filteredStreamReference `json:"referenced_tweets"`
+	InReplyToUserID  string                    `json:"in_reply_to_user_id"`
 }
 
-type extendedTweet struct {
-	FullText         string          `json:"full_text"`
-	Entities         twitterEntities `json:"entities"`
-	ExtendedEntities twitterEntities `json:"extended_entities"`
+type filteredStreamAttachment struct {
+	MediaKeys []string `json:"media_keys"`
 }
 
-type twitterEntities struct {
-	Media []twitterMedia `json:"media"`
+type filteredStreamReference struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
 }
 
-type twitterMedia struct {
-	Type          string `json:"type"`
-	MediaURLHTTPS string `json:"media_url_https"`
-	MediaURL      string `json:"media_url"`
+type filteredStreamIncludes struct {
+	Tweets []filteredStreamTweet `json:"tweets"`
+	Users  []filteredStreamUser  `json:"users"`
+	Media  []filteredStreamMedia `json:"media"`
 }
 
-type twitterUser struct {
-	IDStr      string `json:"id_str"`
-	ScreenName string `json:"screen_name"`
+type filteredStreamUser struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+}
+
+type filteredStreamMedia struct {
+	MediaKey        string `json:"media_key"`
+	Type            string `json:"type"`
+	URL             string `json:"url"`
+	PreviewImageURL string `json:"preview_image_url"`
 }
 
 // RNとat記号の検出用正規表現
@@ -88,14 +89,14 @@ func Tweet2NoteHandler(ctx context.Context, data []byte, crossPostTracker tracke
 func Tweet2NoteHandlerWithConfig(ctx context.Context, cfg Config, data []byte, crossPostTracker tracker.CrossPostTracker, m *metrics.Metrics) error {
 	m.Tweet2NoteTotal.Inc()
 
-	tweets, err := parseAccountActivityPayloadWithConfig(data, cfg)
+	tweets, err := parseFilteredStreamPayloadWithConfig(data, cfg)
 	if err != nil {
 		slog.Error("Failed to parse payload", slog.Any("error", err))
 		m.Tweet2NoteErrors.Inc()
 		return err
 	}
 	if len(tweets) == 0 {
-		slog.Warn("No eligible tweet_create_events in Twitter webhook payload")
+		slog.Warn("No eligible tweet in Twitter stream payload")
 		m.Tweet2NoteSkipped.WithLabelValues("no_eligible_tweets").Inc()
 		return nil
 	}
@@ -248,63 +249,52 @@ func HandleIncomingTweetWithConfig(ctx context.Context, cfg Config, tweet Incomi
 	return nil
 }
 
-func parseAccountActivityPayload(data []byte) ([]IncomingTweet, error) {
-	return parseAccountActivityPayloadWithConfig(data, Config{})
+func parseFilteredStreamPayload(data []byte) ([]IncomingTweet, error) {
+	return parseFilteredStreamPayloadWithConfig(data, Config{})
 }
 
-func parseAccountActivityPayloadWithConfig(data []byte, cfg Config) ([]IncomingTweet, error) {
-	var payload accountActivityPayload
+func parseFilteredStreamPayloadWithConfig(data []byte, cfg Config) ([]IncomingTweet, error) {
+	var payload filteredStreamPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return nil, err
 	}
-
-	tweets := make([]IncomingTweet, 0, len(payload.TweetCreateEvents))
-	for _, event := range payload.TweetCreateEvents {
-		if payload.ForUserID != "" && event.User.IDStr != "" && event.User.IDStr != payload.ForUserID {
-			continue
-		}
-
-		text := tweetText(event)
-		mediaURLs := tweetMediaURLs(event)
-		if text == "" && len(mediaURLs) == 0 {
-			continue
-		}
-
-		tweetID := event.IDStr
-		username := event.User.ScreenName
-		if username == "" {
-			username = cfg.TwitterUsername
-		}
-		quotedTweetID, quotedUserID, quotedUsername := quotedTweet(event)
-		tweets = append(tweets, IncomingTweet{
-			ID:               tweetID,
-			Text:             text,
-			UserID:           event.User.IDStr,
-			Username:         username,
-			URL:              buildTweetURL(username, tweetID),
-			MediaURLs:        mediaURLs,
-			QuotedTweetID:    quotedTweetID,
-			QuotedUserID:     quotedUserID,
-			QuotedUsername:   quotedUsername,
-			InReplyToTweetID: event.InReplyToStatusIDStr,
-		})
+	if payload.Data.ID == "" && payload.Data.Text == "" && len(payload.Data.Attachments.MediaKeys) == 0 {
+		return nil, nil
 	}
 
-	return tweets, nil
+	text := payload.Data.Text
+	mediaURLs := filteredStreamMediaURLs(payload)
+	if text == "" && len(mediaURLs) == 0 {
+		return nil, nil
+	}
+
+	username := filteredStreamUsername(payload, payload.Data.AuthorID)
+	if username == "" {
+		username = cfg.TwitterUsername
+	}
+	quotedTweetID, quotedUserID, quotedUsername := filteredStreamQuote(payload)
+
+	return []IncomingTweet{{
+		ID:               payload.Data.ID,
+		Text:             text,
+		UserID:           payload.Data.AuthorID,
+		Username:         username,
+		URL:              buildTweetURL(username, payload.Data.ID),
+		MediaURLs:        mediaURLs,
+		QuotedTweetID:    quotedTweetID,
+		QuotedUserID:     quotedUserID,
+		QuotedUsername:   quotedUsername,
+		InReplyToTweetID: filteredStreamReplyTweetID(payload.Data),
+	}}, nil
 }
 
-func quotedTweet(event tweetObject) (tweetID, userID, username string) {
-	if event.QuotedStatusIDStr != "" {
-		tweetID = event.QuotedStatusIDStr
-	}
-	if event.QuotedStatus != nil {
-		if tweetID == "" {
-			tweetID = event.QuotedStatus.IDStr
+func filteredStreamUsername(payload filteredStreamPayload, userID string) string {
+	for _, user := range payload.Includes.Users {
+		if user.ID == userID {
+			return user.Username
 		}
-		userID = event.QuotedStatus.User.IDStr
-		username = event.QuotedStatus.User.ScreenName
 	}
-	return tweetID, userID, username
+	return ""
 }
 
 func tweetQuoteSameAuthor(tweet IncomingTweet) bool {
@@ -328,46 +318,58 @@ func resolveMisskeyNoteIDForTweet(ctx context.Context, crossPostTracker tracker.
 	return record.MisskeyNoteID, true, nil
 }
 
-func tweetText(event tweetObject) string {
-	if event.ExtendedTweet.FullText != "" {
-		return event.ExtendedTweet.FullText
+func filteredStreamMediaURLs(payload filteredStreamPayload) []string {
+	mediaByKey := make(map[string]filteredStreamMedia, len(payload.Includes.Media))
+	for _, media := range payload.Includes.Media {
+		mediaByKey[media.MediaKey] = media
 	}
-	if event.FullText != "" {
-		return event.FullText
+
+	seen := map[string]struct{}{}
+	mediaURLs := make([]string, 0, len(payload.Data.Attachments.MediaKeys))
+	for _, mediaKey := range payload.Data.Attachments.MediaKeys {
+		media, ok := mediaByKey[mediaKey]
+		if !ok || media.Type != "photo" || media.URL == "" {
+			continue
+		}
+		if _, ok := seen[media.URL]; ok {
+			continue
+		}
+		seen[media.URL] = struct{}{}
+		mediaURLs = append(mediaURLs, media.URL)
 	}
-	return event.Text
+	return mediaURLs
 }
 
-func tweetMediaURLs(event tweetObject) []string {
-	seen := map[string]struct{}{}
-	mediaURLs := make([]string, 0, 4)
-
-	collect := func(mediaItems []twitterMedia) {
-		for _, media := range mediaItems {
-			if media.Type != "photo" {
-				continue
-			}
-			mediaURL := media.MediaURLHTTPS
-			if mediaURL == "" {
-				mediaURL = media.MediaURL
-			}
-			if mediaURL == "" {
-				continue
-			}
-			if _, ok := seen[mediaURL]; ok {
-				continue
-			}
-			seen[mediaURL] = struct{}{}
-			mediaURLs = append(mediaURLs, mediaURL)
+func filteredStreamQuote(payload filteredStreamPayload) (tweetID, userID, username string) {
+	for _, ref := range payload.Data.ReferencedTweets {
+		if ref.Type == "quoted" {
+			tweetID = ref.ID
+			break
 		}
 	}
+	if tweetID == "" {
+		return "", "", ""
+	}
+	for _, tweet := range payload.Includes.Tweets {
+		if tweet.ID == tweetID {
+			userID = tweet.AuthorID
+			username = filteredStreamUsername(payload, userID)
+			break
+		}
+	}
+	return tweetID, userID, username
+}
 
-	collect(event.ExtendedTweet.ExtendedEntities.Media)
-	collect(event.ExtendedTweet.Entities.Media)
-	collect(event.ExtendedEntities.Media)
-	collect(event.Entities.Media)
-
-	return mediaURLs
+func filteredStreamReplyTweetID(tweet filteredStreamTweet) string {
+	for _, ref := range tweet.ReferencedTweets {
+		if ref.Type == "replied_to" {
+			return ref.ID
+		}
+	}
+	if tweet.InReplyToUserID != "" {
+		return tweet.InReplyToUserID
+	}
+	return ""
 }
 
 func buildTweetURL(username, tweetID string) string {
