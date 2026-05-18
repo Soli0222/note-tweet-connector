@@ -11,6 +11,7 @@ services:
       - -twitter-oauth2-redirect-url=${TWITTER_OAUTH2_REDIRECT_URL:?TWITTER_OAUTH2_REDIRECT_URL is required}
       - -twitter-token-store-path=${TWITTER_TOKEN_STORE_PATH:-data/twitter_oauth2_token.json}
       - -twitter-bearer-token=${TWITTER_BEARER_TOKEN:?TWITTER_BEARER_TOKEN is required}
+      - -twitter-stream-keep-alive-timeout=${TWITTER_STREAM_KEEP_ALIVE_TIMEOUT:-90s}
       - -twitter-username=${TWITTER_USERNAME:?TWITTER_USERNAME is required}
     ports:
       - "8080:8080"

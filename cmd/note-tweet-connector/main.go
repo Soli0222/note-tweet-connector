@@ -46,6 +46,7 @@ type Config struct {
 	TwitterOAuth2RedirectURL  string
 	TwitterTokenStorePath     string
 	TwitterBearerToken        string
+	TwitterStreamKeepAlive    time.Duration
 	TwitterStreamReconnectMin time.Duration
 	TwitterStreamReconnectMax time.Duration
 	TwitterUsername           string
@@ -72,6 +73,7 @@ func parseFlags() *Config {
 	flag.StringVar(&cfg.TwitterOAuth2RedirectURL, "twitter-oauth2-redirect-url", "", "Twitter OAuth 2.0 redirect URL")
 	flag.StringVar(&cfg.TwitterTokenStorePath, "twitter-token-store-path", "data/twitter_oauth2_token.json", "Path to JSON file for refreshed Twitter OAuth 2.0 tokens")
 	flag.StringVar(&cfg.TwitterBearerToken, "twitter-bearer-token", "", "Twitter Application-Only Bearer Token for Filtered Stream")
+	flag.DurationVar(&cfg.TwitterStreamKeepAlive, "twitter-stream-keep-alive-timeout", 90*time.Second, "Twitter stream keep-alive timeout")
 	flag.DurationVar(&cfg.TwitterStreamReconnectMin, "twitter-stream-reconnect-min", 5*time.Second, "Minimum Twitter stream reconnect backoff")
 	flag.DurationVar(&cfg.TwitterStreamReconnectMax, "twitter-stream-reconnect-max", 5*time.Minute, "Maximum Twitter stream reconnect backoff")
 	flag.StringVar(&cfg.TwitterUsername, "twitter-username", "", "Fallback Twitter username")
@@ -116,6 +118,9 @@ func (cfg *Config) validate() error {
 	}
 	if cfg.TwitterUsername == "" {
 		return fmt.Errorf("missing required flags: -twitter-username")
+	}
+	if cfg.TwitterStreamKeepAlive <= 0 {
+		return fmt.Errorf("-twitter-stream-keep-alive-timeout must be positive")
 	}
 	if cfg.TwitterStreamReconnectMin <= 0 {
 		return fmt.Errorf("-twitter-stream-reconnect-min must be positive")
@@ -380,6 +385,14 @@ func updateTrackerEntriesMetric(ctx context.Context, crossPostTracker tracker.Cr
 
 func runTwitterStream(ctx context.Context, streamClient *twitter.StreamClient, cfg handler.Config, crossPostTracker tracker.CrossPostTracker, m *metrics.Metrics, reconnectMin, reconnectMax time.Duration) {
 	backoff := reconnectMin
+	onConnect := streamClient.OnConnect
+	streamClient.OnConnect = func() {
+		backoff = reconnectMin
+		if onConnect != nil {
+			onConnect()
+		}
+	}
+
 	for {
 		if ctx.Err() != nil {
 			return
@@ -449,6 +462,10 @@ func twitterStreamReconnectDelay(err error, fallback time.Duration) time.Duratio
 			return delay
 		}
 	}
+	var httpErr *twitter.StreamHTTPError
+	if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusServiceUnavailable && strings.Contains(httpErr.Body, "ProvisioningSubscription") {
+		return time.Minute
+	}
 	return fallback
 }
 
@@ -512,6 +529,7 @@ func main() {
 		login:  oauth2Login,
 	})
 	streamClient := twitter.NewStreamClient(twitter.StaticBearerTokenSource{Token: cfg.TwitterBearerToken})
+	streamClient.KeepAliveTimeout = cfg.TwitterStreamKeepAlive
 	streamClient.OnConnect = func() {
 		m.TwitterStreamConnects.WithLabelValues("success").Inc()
 		slog.Info("Connected to Twitter Filtered Stream")

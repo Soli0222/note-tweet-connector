@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	defaultStreamKeepAliveTimeout = 20 * time.Second
+	defaultStreamKeepAliveTimeout = 90 * time.Second
 	defaultStreamRuleTag          = "note-tweet-connector"
 )
 
@@ -35,6 +35,7 @@ type StreamRule struct {
 type StreamClient struct {
 	BearerTokenSource BearerTokenSource
 	HTTPClient        *http.Client
+	StreamHTTPClient  *http.Client
 	StreamEndpoint    string
 	RulesEndpoint     string
 	KeepAliveTimeout  time.Duration
@@ -81,6 +82,7 @@ func NewStreamClient(source BearerTokenSource) *StreamClient {
 	return &StreamClient{
 		BearerTokenSource: source,
 		HTTPClient:        httpClient,
+		StreamHTTPClient:  &http.Client{},
 		StreamEndpoint:    FilteredStreamEndpoint,
 		RulesEndpoint:     FilteredStreamRulesEndpoint,
 		KeepAliveTimeout:  defaultStreamKeepAliveTimeout,
@@ -191,7 +193,7 @@ func (c *StreamClient) Consume(ctx context.Context, handleLine func(context.Cont
 		return err
 	}
 
-	client := c.client()
+	client := c.streamClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -289,6 +291,13 @@ func (c *StreamClient) client() *http.Client {
 		return c.HTTPClient
 	}
 	return httpClient
+}
+
+func (c *StreamClient) streamClient() *http.Client {
+	if c.StreamHTTPClient != nil {
+		return c.StreamHTTPClient
+	}
+	return c.client()
 }
 
 func (c *StreamClient) rulesEndpoint() string {
