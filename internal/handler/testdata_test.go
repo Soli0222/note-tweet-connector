@@ -43,17 +43,17 @@ func TestWithTestData_MisskeyNote(t *testing.T) {
 	}
 }
 
-func TestWithTestData_AccountActivityTweet(t *testing.T) {
+func TestWithTestData_FilteredStreamTweet(t *testing.T) {
 	testdataDir := findTestdataDir(t)
 
-	data, err := os.ReadFile(filepath.Join(testdataDir, "account_activity_tweet.json"))
+	data, err := os.ReadFile(filepath.Join(testdataDir, "filtered_stream_tweet.json"))
 	if err != nil {
 		t.Fatalf("Failed to read test data: %v", err)
 	}
 
-	tweets, err := parseAccountActivityPayload(data)
+	tweets, err := parseFilteredStreamPayload(data)
 	if err != nil {
-		t.Fatalf("Failed to parse Account Activity tweet: %v", err)
+		t.Fatalf("Failed to parse Filtered Stream tweet: %v", err)
 	}
 	if len(tweets) != 1 {
 		t.Fatalf("expected 1 tweet, got %d", len(tweets))
@@ -92,7 +92,7 @@ func TestWithTestData_Note2TweetHandler(t *testing.T) {
 func TestWithTestData_Tweet2NoteHandler(t *testing.T) {
 	testdataDir := findTestdataDir(t)
 
-	data, err := os.ReadFile(filepath.Join(testdataDir, "account_activity_tweet.json"))
+	data, err := os.ReadFile(filepath.Join(testdataDir, "filtered_stream_tweet.json"))
 	if err != nil {
 		t.Fatalf("Failed to read test data: %v", err)
 	}

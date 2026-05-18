@@ -1,0 +1,21 @@
+{
+  "data": {
+    "id": "1234567890123456789",
+    "text": "RN [at]dummy_user This is a dummy tweet for testing purposes.\n#Testing #DummyData\nhttps://t.co/dummylink123",
+    "author_id": "111"
+  },
+  "includes": {
+    "users": [
+      {
+        "id": "111",
+        "username": "dummy_user"
+      }
+    ]
+  },
+  "matching_rules": [
+    {
+      "id": "987654321",
+      "tag": "note-tweet-connector"
+    }
+  ]
+}

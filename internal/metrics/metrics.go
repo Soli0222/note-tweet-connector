@@ -22,6 +22,13 @@ type Metrics struct {
 	Tweet2NoteErrors  prometheus.Counter
 	Tweet2NoteSkipped *prometheus.CounterVec
 
+	// Twitter stream metrics
+	TwitterStreamConnects        *prometheus.CounterVec
+	TwitterStreamDisconnects     *prometheus.CounterVec
+	TwitterStreamMessages        *prometheus.CounterVec
+	TwitterStreamLastMessageTime prometheus.Gauge
+	TwitterStreamRuleUpdates     *prometheus.CounterVec
+
 	// Tracker metrics
 	TrackerEntriesTotal  prometheus.Gauge
 	TrackerDuplicatesHit prometheus.Counter
@@ -113,6 +120,41 @@ func NewWithRegistry(version string, registerer prometheus.Registerer) *Metrics 
 			[]string{"reason"},
 		),
 
+		TwitterStreamConnects: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "twitter_stream_connects_total",
+				Help: "Total number of Twitter stream connection attempts",
+			},
+			[]string{"status"},
+		),
+		TwitterStreamDisconnects: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "twitter_stream_disconnects_total",
+				Help: "Total number of Twitter stream disconnects",
+			},
+			[]string{"reason"},
+		),
+		TwitterStreamMessages: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "twitter_stream_messages_total",
+				Help: "Total number of Twitter stream messages processed",
+			},
+			[]string{"status"},
+		),
+		TwitterStreamLastMessageTime: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "twitter_stream_last_message_timestamp_seconds",
+				Help: "Unix timestamp of the last Twitter stream message",
+			},
+		),
+		TwitterStreamRuleUpdates: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "twitter_stream_rule_updates_total",
+				Help: "Total number of Twitter stream rule update attempts",
+			},
+			[]string{"action", "status"},
+		),
+
 		TrackerEntriesTotal: prometheus.NewGauge(
 			prometheus.GaugeOpts{
 				Name: "tracker_entries_total",
@@ -148,6 +190,11 @@ func NewWithRegistry(version string, registerer prometheus.Registerer) *Metrics 
 		m.Tweet2NoteSuccess,
 		m.Tweet2NoteErrors,
 		m.Tweet2NoteSkipped,
+		m.TwitterStreamConnects,
+		m.TwitterStreamDisconnects,
+		m.TwitterStreamMessages,
+		m.TwitterStreamLastMessageTime,
+		m.TwitterStreamRuleUpdates,
 		m.TrackerEntriesTotal,
 		m.TrackerDuplicatesHit,
 		m.BuildInfo,
@@ -235,6 +282,41 @@ func NewNoop() *Metrics {
 				Help: "Total number of skipped tweet to note conversions",
 			},
 			[]string{"reason"},
+		),
+
+		TwitterStreamConnects: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "twitter_stream_connects_total",
+				Help: "Total number of Twitter stream connection attempts",
+			},
+			[]string{"status"},
+		),
+		TwitterStreamDisconnects: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "twitter_stream_disconnects_total",
+				Help: "Total number of Twitter stream disconnects",
+			},
+			[]string{"reason"},
+		),
+		TwitterStreamMessages: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "twitter_stream_messages_total",
+				Help: "Total number of Twitter stream messages processed",
+			},
+			[]string{"status"},
+		),
+		TwitterStreamLastMessageTime: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "twitter_stream_last_message_timestamp_seconds",
+				Help: "Unix timestamp of the last Twitter stream message",
+			},
+		),
+		TwitterStreamRuleUpdates: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "twitter_stream_rule_updates_total",
+				Help: "Total number of Twitter stream rule update attempts",
+			},
+			[]string{"action", "status"},
 		),
 
 		TrackerEntriesTotal: prometheus.NewGauge(

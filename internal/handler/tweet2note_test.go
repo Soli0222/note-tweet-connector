@@ -21,7 +21,7 @@ func testHandlerConfig() Config {
 	}
 }
 
-func TestParseAccountActivityPayload(t *testing.T) {
+func TestParseFilteredStreamPayload(t *testing.T) {
 	tests := []struct {
 		name    string
 		payload string
@@ -29,20 +29,22 @@ func TestParseAccountActivityPayload(t *testing.T) {
 		check   func(*testing.T, []IncomingTweet)
 	}{
 		{
-			name: "valid tweet_create_events payload",
+			name: "valid stream payload",
 			payload: `{
-				"for_user_id": "111",
-				"tweet_create_events": [
-					{
-						"id_str": "123456789",
+					"data": {
+						"id": "123456789",
 						"text": "Hello, world!",
-						"user": {
-							"id_str": "111",
-							"screen_name": "dummy_user"
-						}
+						"author_id": "111"
+					},
+					"includes": {
+						"users": [
+							{
+								"id": "111",
+								"username": "dummy_user"
+							}
+						]
 					}
-				]
-			}`,
+				}`,
 			check: func(t *testing.T, tweets []IncomingTweet) {
 				if len(tweets) != 1 {
 					t.Fatalf("expected 1 tweet, got %d", len(tweets))
@@ -56,133 +58,42 @@ func TestParseAccountActivityPayload(t *testing.T) {
 			},
 		},
 		{
-			name: "full_text takes precedence",
-			payload: `{
-				"for_user_id": "111",
-				"tweet_create_events": [
-					{
-						"id_str": "123456789",
-						"text": "truncated...",
-						"full_text": "Full tweet text",
-						"user": {
-							"id_str": "111",
-							"screen_name": "dummy_user"
-						}
-					}
-				]
-			}`,
-			check: func(t *testing.T, tweets []IncomingTweet) {
-				if len(tweets) != 1 {
-					t.Fatalf("expected 1 tweet, got %d", len(tweets))
-				}
-				if tweets[0].Text != "Full tweet text" {
-					t.Errorf("expected full_text, got '%s'", tweets[0].Text)
-				}
-			},
-		},
-		{
-			name: "extended_tweet full_text takes precedence",
-			payload: `{
-				"for_user_id": "111",
-				"tweet_create_events": [
-					{
-						"id_str": "123456789",
-						"text": "truncated...",
-						"full_text": "legacy full text",
-						"extended_tweet": {
-							"full_text": "extended full text"
-						},
-						"user": {
-							"id_str": "111",
-							"screen_name": "dummy_user"
-						}
-					}
-				]
-			}`,
-			check: func(t *testing.T, tweets []IncomingTweet) {
-				if len(tweets) != 1 {
-					t.Fatalf("expected 1 tweet, got %d", len(tweets))
-				}
-				if tweets[0].Text != "extended full text" {
-					t.Errorf("expected extended_tweet.full_text, got %q", tweets[0].Text)
-				}
-			},
-		},
-		{
 			name: "extract photo media URLs",
 			payload: `{
-				"for_user_id": "111",
-				"tweet_create_events": [
-					{
-						"id_str": "123456789",
+					"data": {
+						"id": "123456789",
 						"text": "with media",
-						"extended_entities": {
-							"media": [
-								{
-									"type": "photo",
-									"media_url_https": "https://pbs.twimg.com/media/photo1.png"
-								},
-								{
-									"type": "video",
-									"media_url_https": "https://video.twimg.com/video.mp4"
-								}
-							]
-						},
-						"user": {
-							"id_str": "111",
-							"screen_name": "dummy_user"
+						"author_id": "111",
+						"attachments": {
+							"media_keys": ["photo-1", "video-1", "photo-2", "photo-2"]
 						}
-					}
-				]
-			}`,
-			check: func(t *testing.T, tweets []IncomingTweet) {
-				if len(tweets) != 1 {
-					t.Fatalf("expected 1 tweet, got %d", len(tweets))
-				}
-				want := []string{"https://pbs.twimg.com/media/photo1.png"}
-				if !reflect.DeepEqual(tweets[0].MediaURLs, want) {
-					t.Fatalf("MediaURLs = %#v, want %#v", tweets[0].MediaURLs, want)
-				}
-			},
-		},
-		{
-			name: "extended_tweet media takes precedence and deduplicates",
-			payload: `{
-				"for_user_id": "111",
-				"tweet_create_events": [
-					{
-						"id_str": "123456789",
-						"text": "with media",
-						"entities": {
-							"media": [
-								{
-									"type": "photo",
-									"media_url_https": "https://pbs.twimg.com/media/photo2.png"
-								}
-							]
-						},
-						"extended_tweet": {
-							"full_text": "with media full text",
-							"extended_entities": {
-								"media": [
-									{
-										"type": "photo",
-										"media_url_https": "https://pbs.twimg.com/media/photo1.png"
-									},
-									{
-										"type": "photo",
-										"media_url_https": "https://pbs.twimg.com/media/photo2.png"
-									}
-								]
+					},
+					"includes": {
+						"media": [
+							{
+								"media_key": "photo-1",
+								"type": "photo",
+								"url": "https://pbs.twimg.com/media/photo1.png"
+							},
+							{
+								"media_key": "video-1",
+								"type": "video",
+								"preview_image_url": "https://pbs.twimg.com/media/video.jpg"
+							},
+							{
+								"media_key": "photo-2",
+								"type": "photo",
+								"url": "https://pbs.twimg.com/media/photo2.png"
 							}
-						},
-						"user": {
-							"id_str": "111",
-							"screen_name": "dummy_user"
-						}
+						],
+						"users": [
+							{
+								"id": "111",
+								"username": "dummy_user"
+							}
+						]
 					}
-				]
-			}`,
+				}`,
 			check: func(t *testing.T, tweets []IncomingTweet) {
 				if len(tweets) != 1 {
 					t.Fatalf("expected 1 tweet, got %d", len(tweets))
@@ -199,26 +110,24 @@ func TestParseAccountActivityPayload(t *testing.T) {
 		{
 			name: "keeps media only tweet",
 			payload: `{
-				"for_user_id": "111",
-				"tweet_create_events": [
-					{
-						"id_str": "123456789",
+					"data": {
+						"id": "123456789",
 						"text": "",
-						"extended_entities": {
-							"media": [
-								{
-									"type": "photo",
-									"media_url_https": "https://pbs.twimg.com/media/photo1.png"
-								}
-							]
-						},
-						"user": {
-							"id_str": "111",
-							"screen_name": "dummy_user"
+						"author_id": "111",
+						"attachments": {
+							"media_keys": ["photo-1"]
 						}
+					},
+					"includes": {
+						"media": [
+							{
+								"media_key": "photo-1",
+								"type": "photo",
+								"url": "https://pbs.twimg.com/media/photo1.png"
+							}
+						]
 					}
-				]
-			}`,
+				}`,
 			check: func(t *testing.T, tweets []IncomingTweet) {
 				if len(tweets) != 1 {
 					t.Fatalf("expected 1 tweet, got %d", len(tweets))
@@ -233,50 +142,35 @@ func TestParseAccountActivityPayload(t *testing.T) {
 			},
 		},
 		{
-			name: "mention from another user is ignored",
-			payload: `{
-				"for_user_id": "111",
-				"tweet_create_events": [
-					{
-						"id_str": "123456789",
-						"text": "@dummy_user hello",
-						"user": {
-							"id_str": "222",
-							"screen_name": "other_user"
-						}
-					}
-				]
-			}`,
-			check: func(t *testing.T, tweets []IncomingTweet) {
-				if len(tweets) != 0 {
-					t.Fatalf("expected no tweets, got %d", len(tweets))
-				}
-			},
-		},
-		{
 			name: "extract quote tweet metadata",
 			payload: `{
-				"for_user_id": "111",
-				"tweet_create_events": [
-					{
-						"id_str": "123456789",
+					"data": {
+						"id": "123456789",
 						"text": "quote text https://t.co/source",
-						"user": {
-							"id_str": "111",
-							"screen_name": "dummy_user"
-						},
-						"quoted_status_id_str": "987654321",
-						"quoted_status": {
-							"id_str": "987654321",
-							"text": "source text",
-							"user": {
-								"id_str": "111",
-								"screen_name": "dummy_user"
+						"author_id": "111",
+						"referenced_tweets": [
+							{
+								"type": "quoted",
+								"id": "987654321"
 							}
-						}
+						]
+					},
+					"includes": {
+						"tweets": [
+							{
+								"id": "987654321",
+								"text": "source text",
+								"author_id": "111"
+							}
+						],
+						"users": [
+							{
+								"id": "111",
+								"username": "dummy_user"
+							}
+						]
 					}
-				]
-			}`,
+				}`,
 			check: func(t *testing.T, tweets []IncomingTweet) {
 				if len(tweets) != 1 {
 					t.Fatalf("expected 1 tweet, got %d", len(tweets))
@@ -295,19 +189,18 @@ func TestParseAccountActivityPayload(t *testing.T) {
 		{
 			name: "extract reply metadata",
 			payload: `{
-				"for_user_id": "111",
-				"tweet_create_events": [
-					{
-						"id_str": "123456789",
+					"data": {
+						"id": "123456789",
 						"text": "reply text",
-						"in_reply_to_status_id_str": "987654321",
-						"user": {
-							"id_str": "111",
-							"screen_name": "dummy_user"
-						}
+						"author_id": "111",
+						"referenced_tweets": [
+							{
+								"type": "replied_to",
+								"id": "987654321"
+							}
+						]
 					}
-				]
-			}`,
+				}`,
 			check: func(t *testing.T, tweets []IncomingTweet) {
 				if len(tweets) != 1 {
 					t.Fatalf("expected 1 tweet, got %d", len(tweets))
@@ -335,9 +228,9 @@ func TestParseAccountActivityPayload(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := parseAccountActivityPayload([]byte(tt.payload))
+			result, err := parseFilteredStreamPayload([]byte(tt.payload))
 			if (err != nil) != tt.wantErr {
-				t.Errorf("parseAccountActivityPayload() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("parseFilteredStreamPayload() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if tt.check != nil {
@@ -506,17 +399,19 @@ func TestTweet2NoteHandler_SkipConditions(t *testing.T) {
 	m := metrics.NewNoop()
 
 	payload := `{
-		"for_user_id": "111",
-		"tweet_create_events": [
-			{
-				"id_str": "123",
-				"text": "RN [at] someone This is a renote",
-				"user": {
-					"id_str": "111",
-					"screen_name": "dummy_user"
+		"data": {
+			"id": "123",
+			"text": "RN [at] someone This is a renote",
+			"author_id": "111"
+		},
+		"includes": {
+			"users": [
+				{
+					"id": "111",
+					"username": "dummy_user"
 				}
-			}
-		]
+			]
+		}
 	}`
 
 	err := Tweet2NoteHandlerWithConfig(ctx, testHandlerConfig(), []byte(payload), crossPostTracker, m)
@@ -535,17 +430,19 @@ func TestTweet2NoteHandler_KnownCrossPostDetection(t *testing.T) {
 	}
 
 	payload := `{
-		"for_user_id": "111",
-		"tweet_create_events": [
-			{
-				"id_str": "222",
-				"text": "Duplicate tweet content for testing",
-				"user": {
-					"id_str": "111",
-					"screen_name": "dummy_user"
+		"data": {
+			"id": "222",
+			"text": "Duplicate tweet content for testing",
+			"author_id": "111"
+		},
+		"includes": {
+			"users": [
+				{
+					"id": "111",
+					"username": "dummy_user"
 				}
-			}
-		]
+			]
+		}
 	}`
 
 	err := Tweet2NoteHandlerWithConfig(ctx, testHandlerConfig(), []byte(payload), crossPostTracker, m)
@@ -567,18 +464,25 @@ func TestTweet2NoteHandler_SkipsReply(t *testing.T) {
 	}
 
 	payload := `{
-		"for_user_id": "111",
-		"tweet_create_events": [
-			{
-				"id_str": "333",
-				"text": "Reply tweet",
-				"in_reply_to_status_id_str": "222",
-				"user": {
-					"id_str": "111",
-					"screen_name": "dummy_user"
+		"data": {
+			"id": "333",
+			"text": "Reply tweet",
+			"author_id": "111",
+			"referenced_tweets": [
+				{
+					"type": "replied_to",
+					"id": "222"
 				}
-			}
-		]
+			]
+		},
+		"includes": {
+			"users": [
+				{
+					"id": "111",
+					"username": "dummy_user"
+				}
+			]
+		}
 	}`
 
 	if err := Tweet2NoteHandlerWithConfig(ctx, testHandlerConfig(), []byte(payload), crossPostTracker, m); err != nil {
@@ -594,10 +498,7 @@ func TestTweet2NoteHandler_NoEligibleTweets(t *testing.T) {
 	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
 	m := metrics.NewNoop()
 
-	payload := `{
-		"for_user_id": "111",
-		"tweet_create_events": []
-	}`
+	payload := `{}`
 
 	err := Tweet2NoteHandlerWithConfig(ctx, testHandlerConfig(), []byte(payload), crossPostTracker, m)
 	if err != nil {
@@ -621,16 +522,10 @@ func TestTweet2NoteHandler_SkipsMissingTweetID(t *testing.T) {
 	}
 
 	payload := `{
-		"for_user_id": "111",
-		"tweet_create_events": [
-			{
-				"text": "Tweet without ID",
-				"user": {
-					"id_str": "111",
-					"screen_name": "dummy_user"
-				}
-			}
-		]
+		"data": {
+			"text": "Tweet without ID",
+			"author_id": "111"
+		}
 	}`
 
 	if err := Tweet2NoteHandlerWithConfig(ctx, testHandlerConfig(), []byte(payload), crossPostTracker, m); err != nil {
@@ -681,23 +576,18 @@ func TestBuildTweetURL(t *testing.T) {
 	}
 }
 
-func TestParseAccountActivityPayload_UsernameFallback(t *testing.T) {
+func TestParseFilteredStreamPayload_UsernameFallback(t *testing.T) {
 	payload := `{
-		"for_user_id": "111",
-		"tweet_create_events": [
-			{
-				"id_str": "123456789",
-				"text": "Hello, world!",
-				"user": {
-					"id_str": "111"
-				}
-			}
-		]
+		"data": {
+			"id": "123456789",
+			"text": "Hello, world!",
+			"author_id": "111"
+		}
 	}`
 
-	result, err := parseAccountActivityPayloadWithConfig([]byte(payload), testHandlerConfig())
+	result, err := parseFilteredStreamPayloadWithConfig([]byte(payload), testHandlerConfig())
 	if err != nil {
-		t.Fatalf("parseAccountActivityPayload() error = %v", err)
+		t.Fatalf("parseFilteredStreamPayload() error = %v", err)
 	}
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tweet, got %d", len(result))
@@ -712,22 +602,24 @@ func TestParseAccountActivityPayload_UsernameFallback(t *testing.T) {
 
 func TestTweet2NoteHandler_JapaneseContent(t *testing.T) {
 	payload := `{
-		"for_user_id": "111",
-		"tweet_create_events": [
-			{
-				"id_str": "1234567890123456789",
-				"text": "ダミーソング / ダミーアーティスト\n#NowPlaying #Testing\nhttps://t.co/dummylink123",
-				"user": {
-					"id_str": "111",
-					"screen_name": "dummy_user"
+		"data": {
+			"id": "1234567890123456789",
+			"text": "ダミーソング / ダミーアーティスト\n#NowPlaying #Testing\nhttps://t.co/dummylink123",
+			"author_id": "111"
+		},
+		"includes": {
+			"users": [
+				{
+					"id": "111",
+					"username": "dummy_user"
 				}
-			}
-		]
+			]
+		}
 	}`
 
-	result, err := parseAccountActivityPayload([]byte(payload))
+	result, err := parseFilteredStreamPayload([]byte(payload))
 	if err != nil {
-		t.Fatalf("parseAccountActivityPayload() error = %v", err)
+		t.Fatalf("parseFilteredStreamPayload() error = %v", err)
 	}
 
 	if len(result) != 1 {
