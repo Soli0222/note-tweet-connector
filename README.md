@@ -77,6 +77,7 @@ note-tweet-connector \
 | `-twitter-oauth2-redirect-url` | なし | OAuth 2.0 callback URL。Twitter Developer Portalのcallback URLと完全一致させる |
 | `-twitter-token-store-path` | `data/twitter_oauth2_token.json` | 更新済みOAuth 2.0 tokenを保存するJSONファイル |
 | `-twitter-bearer-token` | なし | Twitter Filtered Streamとrule管理に使うApplication-Only Bearer Token |
+| `-twitter-stream-keep-alive-timeout` | `90s` | Twitter streamのデータまたはkeep-aliveが途絶えたと判断するまでの時間 |
 | `-twitter-stream-reconnect-min` | `5s` | Twitter stream再接続backoffの初期値 |
 | `-twitter-stream-reconnect-max` | `5m` | Twitter stream再接続backoffの上限 |
 | `-twitter-username` | なし | stream rule生成とpayloadからユーザー名を取得できない場合に使うTwitterユーザー名 |
@@ -140,6 +141,7 @@ docker compose up -d
 | `TWITTER_OAUTH2_REDIRECT_URL` | はい | Twitter OAuth 2.0 callback URL。例: `https://your-domain.example/twitter/callback` |
 | `TWITTER_TOKEN_STORE_PATH` | いいえ | 更新済みOAuth 2.0 tokenの保存先。未指定時は`data/twitter_oauth2_token.json` |
 | `TWITTER_BEARER_TOKEN` | はい | Twitter Filtered Streamとrule管理に使うApplication-Only Bearer Token |
+| `TWITTER_STREAM_KEEP_ALIVE_TIMEOUT` | いいえ | Twitter stream keep-alive timeout。未指定時は`90s` |
 | `TWITTER_USERNAME` | はい | stream rule生成とfallback用Twitterユーザー名 |
 
 CrossPostTrackerのsqlite DBはコンテナ内の`/app/data/tracker.sqlite`に作成されます。OAuth 2.0 token storeはデフォルトで`/app/data/twitter_oauth2_token.json`に作成されます。`compose.yaml`では`./data:/app/data`をマウントしているため、コンテナを再作成してもTrackerの対応関係と更新済みtokenは保持されます。
@@ -193,7 +195,7 @@ from:${TWITTER_USERNAME} -is:retweet -is:reply
 ### TwitterからMisskey
 
 - Twitter Filtered Streamに永続接続し、受信したpayloadを処理します。
-- 20秒以上streamのデータまたはkeep-aliveが来ない場合は接続を切り、backoff付きで再接続します。
+- `-twitter-stream-keep-alive-timeout`以上streamのデータまたはkeep-aliveが来ない場合は接続を切り、backoff付きで再接続します。
 - 転送対象のtweetがないpayloadはログと`tweet2note_skipped_total{reason="no_eligible_tweets"}`で記録します。
 - CrossPostTrackerに登録済みのtweetはスキップします。
 - `referenced_tweets.type == "replied_to"`があるリプライtweetはスキップします。

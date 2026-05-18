@@ -105,7 +105,7 @@ func TestConsumeReadsStreamLines(t *testing.T) {
 
 	client := NewStreamClient(StaticBearerTokenSource{Token: "token-1"})
 	client.StreamEndpoint = server.URL + "/2/tweets/search/stream"
-	client.HTTPClient = server.Client()
+	client.StreamHTTPClient = server.Client()
 	client.KeepAliveTimeout = time.Second
 
 	var lines [][]byte
@@ -123,5 +123,18 @@ func TestConsumeReadsStreamLines(t *testing.T) {
 		if !strings.Contains(gotQuery, want) {
 			t.Fatalf("query %q does not contain %q", gotQuery, want)
 		}
+	}
+}
+
+func TestNewStreamClientUsesHTTPClientWithoutTimeoutForStream(t *testing.T) {
+	client := NewStreamClient(StaticBearerTokenSource{Token: "token-1"})
+	if client.StreamHTTPClient == nil {
+		t.Fatal("StreamHTTPClient is nil")
+	}
+	if client.StreamHTTPClient.Timeout != 0 {
+		t.Fatalf("StreamHTTPClient.Timeout = %s, want 0", client.StreamHTTPClient.Timeout)
+	}
+	if client.HTTPClient == nil || client.HTTPClient.Timeout == 0 {
+		t.Fatalf("HTTPClient timeout = %v, want non-zero timeout for non-stream requests", client.HTTPClient.Timeout)
 	}
 }
