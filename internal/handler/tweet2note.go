@@ -21,6 +21,7 @@ type IncomingTweet struct {
 	Username         string
 	URL              string
 	MediaURLs        []string
+	IsRetweet        bool
 	QuotedTweetID    string
 	QuotedUserID     string
 	QuotedUsername   string
@@ -198,17 +199,20 @@ func HandleIncomingTweetWithConfig(ctx context.Context, cfg Config, tweet Incomi
 		return fmt.Errorf("misskey token is not configured")
 	}
 
-	fileIDs := make([]string, 0, min(len(tweet.MediaURLs), 4))
-	for i := 0; i < len(tweet.MediaURLs) && i < 4; i++ {
-		fileID, err := uploadMisskeyDriveFileFromURL(ctx, cfg.MisskeyHost, cfg.MisskeyToken, tweet.MediaURLs[i], cfg.TwitterMediaAllowedHosts)
-		if err != nil {
-			slog.Error("Failed to upload tweet media to Misskey Drive",
-				slog.String("media_url", tweet.MediaURLs[i]),
-				slog.Any("error", err))
-			m.Tweet2NoteErrors.Inc()
-			return err
+	var fileIDs []string
+	if !tweet.IsRetweet {
+		fileIDs = make([]string, 0, min(len(tweet.MediaURLs), 4))
+		for i := 0; i < len(tweet.MediaURLs) && i < 4; i++ {
+			fileID, err := uploadMisskeyDriveFileFromURL(ctx, cfg.MisskeyHost, cfg.MisskeyToken, tweet.MediaURLs[i], cfg.TwitterMediaAllowedHosts)
+			if err != nil {
+				slog.Error("Failed to upload tweet media to Misskey Drive",
+					slog.String("media_url", tweet.MediaURLs[i]),
+					slog.Any("error", err))
+				m.Tweet2NoteErrors.Inc()
+				return err
+			}
+			fileIDs = append(fileIDs, fileID)
 		}
-		fileIDs = append(fileIDs, fileID)
 	}
 
 	noteID, err := createMisskeyNoteWithOptions(ctx, cfg.MisskeyHost, cfg.MisskeyToken, misskey.CreateNoteOptions{
@@ -263,7 +267,11 @@ func parseFilteredStreamPayloadWithConfig(data []byte, cfg Config) ([]IncomingTw
 	}
 
 	text := payload.Data.Text
-	mediaURLs := filteredStreamMediaURLs(payload)
+	isRetweet := filteredStreamRetweetedTweetID(payload) != ""
+	var mediaURLs []string
+	if !isRetweet {
+		mediaURLs = filteredStreamMediaURLs(payload)
+	}
 	if text == "" && len(mediaURLs) == 0 {
 		return nil, nil
 	}
@@ -285,6 +293,7 @@ func parseFilteredStreamPayloadWithConfig(data []byte, cfg Config) ([]IncomingTw
 		Username:         username,
 		URL:              tweetURL,
 		MediaURLs:        mediaURLs,
+		IsRetweet:        isRetweet,
 		QuotedTweetID:    quotedTweetID,
 		QuotedUserID:     quotedUserID,
 		QuotedUsername:   quotedUsername,
@@ -365,19 +374,22 @@ func filteredStreamQuote(payload filteredStreamPayload) (tweetID, userID, userna
 }
 
 func filteredStreamRetweetURL(payload filteredStreamPayload) string {
-	var retweetedTweetID string
-	for _, ref := range payload.Data.ReferencedTweets {
-		if ref.Type == "retweeted" {
-			retweetedTweetID = ref.ID
-			break
-		}
-	}
+	retweetedTweetID := filteredStreamRetweetedTweetID(payload)
 	if retweetedTweetID == "" {
 		return ""
 	}
 	for _, tweet := range payload.Includes.Tweets {
 		if tweet.ID == retweetedTweetID {
 			return buildTweetURL(filteredStreamUsername(payload, tweet.AuthorID), retweetedTweetID)
+		}
+	}
+	return ""
+}
+
+func filteredStreamRetweetedTweetID(payload filteredStreamPayload) string {
+	for _, ref := range payload.Data.ReferencedTweets {
+		if ref.Type == "retweeted" {
+			return ref.ID
 		}
 	}
 	return ""

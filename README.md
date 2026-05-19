@@ -200,8 +200,8 @@ from:${TWITTER_USERNAME} -is:reply
 - CrossPostTrackerに登録済みのtweetはスキップします。
 - `referenced_tweets.type == "replied_to"`があるリプライtweetはスキップします。
 - `RN [at]`で始まるtweetは転送ループ抑止のためスキップします。
-- `RT @`で始まるtweetは元tweet URLを本文末尾に追記します。Filtered Stream ruleではretweetを除外しません。
-- photoメディアは最大4件までMisskey Driveへアップロードし、ノートに添付します。取得元URLはHTTPSかつ`-twitter-media-hosts`に含まれる必要があります。
+- `RT @`で始まるtweetは元tweet URLを本文末尾に追記します。リツイートの場合、画像はMisskey Driveへアップロードしません。Filtered Stream ruleではretweetを除外しません。
+- 通常のtweetのphotoメディアは最大4件までMisskey Driveへアップロードし、ノートに添付します。取得元URLはHTTPSかつ`-twitter-media-hosts`に含まれる必要があります。
 - 同一作者の引用tweetで、引用元tweet IDに対応するMisskey note IDがTrackerにある場合は、Misskeyのrenoteとして作成します。
 
 ## エンドポイント
