@@ -211,12 +211,15 @@ func TestParseFilteredStreamPayload(t *testing.T) {
 			},
 		},
 		{
-			name: "retweet uses referenced tweet URL",
+			name: "retweet uses referenced tweet URL and skips media",
 			payload: `{
 					"data": {
 						"id": "123456789",
 						"text": "RT @other_user: original text",
 						"author_id": "111",
+						"attachments": {
+							"media_keys": ["photo-1"]
+						},
 						"referenced_tweets": [
 							{
 								"type": "retweeted",
@@ -230,6 +233,13 @@ func TestParseFilteredStreamPayload(t *testing.T) {
 								"id": "987654321",
 								"text": "original text",
 								"author_id": "222"
+							}
+						],
+						"media": [
+							{
+								"media_key": "photo-1",
+								"type": "photo",
+								"url": "https://pbs.twimg.com/media/retweet.png"
 							}
 						],
 						"users": [
@@ -250,6 +260,12 @@ func TestParseFilteredStreamPayload(t *testing.T) {
 				}
 				if tweets[0].URL != "https://twitter.com/other_user/status/987654321" {
 					t.Fatalf("URL = %q", tweets[0].URL)
+				}
+				if !tweets[0].IsRetweet {
+					t.Fatal("IsRetweet = false, want true")
+				}
+				if len(tweets[0].MediaURLs) != 0 {
+					t.Fatalf("MediaURLs = %#v, want empty for retweet", tweets[0].MediaURLs)
 				}
 			},
 		},
@@ -344,6 +360,50 @@ func TestHandleIncomingTweet_WithMedia(t *testing.T) {
 	}
 	if ok, err := crossPostTracker.HasMisskeyNote(ctx, "note-123"); err != nil || !ok {
 		t.Fatal("note ID was not recorded")
+	}
+}
+
+func TestHandleIncomingTweet_RetweetSkipsMediaUpload(t *testing.T) {
+	ctx := context.Background()
+	crossPostTracker := tracker.NewCrossPostTracker(ctx, 1*time.Hour)
+	m := metrics.NewNoop()
+
+	oldCreate := createMisskeyNoteWithOptions
+	oldUpload := uploadMisskeyDriveFileFromURL
+	defer func() {
+		createMisskeyNoteWithOptions = oldCreate
+		uploadMisskeyDriveFileFromURL = oldUpload
+	}()
+
+	uploadMisskeyDriveFileFromURL = func(ctx context.Context, host, token, fileURL string, allowedHosts []string) (string, error) {
+		t.Fatal("UploadDriveFileFromURLWithAllowedHosts should not be called for a retweet")
+		return "", nil
+	}
+
+	var gotOptions misskey.CreateNoteOptions
+	createMisskeyNoteWithOptions = func(ctx context.Context, host, token string, options misskey.CreateNoteOptions) (string, error) {
+		gotOptions = options
+		return "note-123", nil
+	}
+
+	tweet := IncomingTweet{
+		ID:        "123",
+		Text:      "RT @other_user: original text",
+		Username:  "dummy_user",
+		URL:       "https://twitter.com/other_user/status/456",
+		MediaURLs: []string{"https://pbs.twimg.com/media/retweet.png"},
+		IsRetweet: true,
+	}
+
+	if err := HandleIncomingTweetWithConfig(ctx, testHandlerConfig(), tweet, crossPostTracker, m); err != nil {
+		t.Fatalf("HandleIncomingTweet() error = %v", err)
+	}
+	wantText := "RT @other_user: original text\n\nhttps://twitter.com/other_user/status/456"
+	if gotOptions.Text != wantText {
+		t.Fatalf("Text = %q, want %q", gotOptions.Text, wantText)
+	}
+	if len(gotOptions.FileIDs) != 0 {
+		t.Fatalf("FileIDs = %#v, want empty", gotOptions.FileIDs)
 	}
 }
 
