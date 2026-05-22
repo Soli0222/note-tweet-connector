@@ -18,6 +18,7 @@ import (
 	"github.com/Soli0222/note-tweet-connector/internal/handler"
 	"github.com/Soli0222/note-tweet-connector/internal/metrics"
 	"github.com/Soli0222/note-tweet-connector/internal/misskey"
+	"github.com/Soli0222/note-tweet-connector/internal/notify"
 	"github.com/Soli0222/note-tweet-connector/internal/tracker"
 	"github.com/Soli0222/note-tweet-connector/internal/twitter"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -37,19 +38,24 @@ type Config struct {
 	ShutdownTimeout  time.Duration
 	LogLevel         string
 
-	MisskeyHookSecret         string
-	MisskeyHost               string
-	MisskeyToken              string
-	MisskeyMediaHost          string
-	TwitterMediaHosts         string
-	TwitterOAuth2ClientID     string
-	TwitterOAuth2RedirectURL  string
-	TwitterTokenStorePath     string
-	TwitterBearerToken        string
-	TwitterStreamKeepAlive    time.Duration
-	TwitterStreamReconnectMin time.Duration
-	TwitterStreamReconnectMax time.Duration
-	TwitterUsername           string
+	MisskeyHookSecret          string
+	MisskeyHost                string
+	MisskeyToken               string
+	MisskeyMediaHost           string
+	TwitterMediaHosts          string
+	TwitterOAuth2ClientID      string
+	TwitterOAuth2RedirectURL   string
+	TwitterTokenStorePath      string
+	TwitterBearerToken         string
+	TwitterStreamKeepAlive     time.Duration
+	TwitterStreamReconnectMin  time.Duration
+	TwitterStreamReconnectMax  time.Duration
+	TwitterUsername            string
+	DiscordWebhookURL          string
+	DiscordNotifyTimeout       time.Duration
+	DiscordStreamLoopWindow    time.Duration
+	DiscordStreamLoopThreshold int
+	DiscordErrorDedupeWindow   time.Duration
 }
 
 func parseFlags() *Config {
@@ -77,6 +83,11 @@ func parseFlags() *Config {
 	flag.DurationVar(&cfg.TwitterStreamReconnectMin, "twitter-stream-reconnect-min", 5*time.Second, "Minimum Twitter stream reconnect backoff")
 	flag.DurationVar(&cfg.TwitterStreamReconnectMax, "twitter-stream-reconnect-max", 5*time.Minute, "Maximum Twitter stream reconnect backoff")
 	flag.StringVar(&cfg.TwitterUsername, "twitter-username", "", "Fallback Twitter username")
+	flag.StringVar(&cfg.DiscordWebhookURL, "discord-webhook-url", "", "Discord webhook URL for operator notifications")
+	flag.DurationVar(&cfg.DiscordNotifyTimeout, "discord-notify-timeout", 5*time.Second, "Discord notification request timeout")
+	flag.DurationVar(&cfg.DiscordStreamLoopWindow, "discord-stream-loop-window", 10*time.Minute, "Window for Twitter stream disconnect loop notification")
+	flag.IntVar(&cfg.DiscordStreamLoopThreshold, "discord-stream-loop-threshold", 5, "Disconnect count threshold for Twitter stream loop notification")
+	flag.DurationVar(&cfg.DiscordErrorDedupeWindow, "discord-error-dedupe-window", 10*time.Minute, "Duration to suppress duplicate Discord error notifications")
 
 	showVersion := flag.Bool("version", false, "Show version and exit")
 
@@ -128,10 +139,22 @@ func (cfg *Config) validate() error {
 	if cfg.TwitterStreamReconnectMax < cfg.TwitterStreamReconnectMin {
 		return fmt.Errorf("-twitter-stream-reconnect-max must be greater than or equal to -twitter-stream-reconnect-min")
 	}
+	if cfg.DiscordNotifyTimeout <= 0 {
+		return fmt.Errorf("-discord-notify-timeout must be positive")
+	}
+	if cfg.DiscordStreamLoopWindow <= 0 {
+		return fmt.Errorf("-discord-stream-loop-window must be positive")
+	}
+	if cfg.DiscordStreamLoopThreshold <= 0 {
+		return fmt.Errorf("-discord-stream-loop-threshold must be positive")
+	}
+	if cfg.DiscordErrorDedupeWindow < 0 {
+		return fmt.Errorf("-discord-error-dedupe-window must be non-negative")
+	}
 	return nil
 }
 
-func (cfg *Config) handlerConfig(bearerTokenSource twitter.BearerTokenSource) handler.Config {
+func (cfg *Config) handlerConfig(bearerTokenSource twitter.BearerTokenSource, notifier notify.Notifier) handler.Config {
 	return handler.Config{
 		MisskeyHost:              cfg.MisskeyHost,
 		MisskeyToken:             cfg.MisskeyToken,
@@ -144,6 +167,7 @@ func (cfg *Config) handlerConfig(bearerTokenSource twitter.BearerTokenSource) ha
 			BearerTokenSource: bearerTokenSource,
 			MisskeyMediaHost:  cfg.MisskeyMediaHost,
 		},
+		Notifier: notifier,
 	}
 }
 
@@ -182,17 +206,19 @@ type server struct {
 	cfg              handler.Config
 	misskeySecret    string
 	twitterOAuth2    *twitter.OAuth2LoginManager
+	notifier         notify.Notifier
 }
 
 type authorizationLoggingTokenSource struct {
-	source twitter.ForceRefreshBearerTokenSource
-	login  *twitter.OAuth2LoginManager
+	source   twitter.ForceRefreshBearerTokenSource
+	login    *twitter.OAuth2LoginManager
+	notifier notify.Notifier
 }
 
 func (s *authorizationLoggingTokenSource) BearerToken(ctx context.Context) (string, error) {
 	token, err := s.source.BearerToken(ctx)
 	if errors.Is(err, twitter.ErrAuthorizationRequired) {
-		logTwitterOAuth2AuthorizationRequired(s.login)
+		notifyTwitterOAuth2AuthorizationRequired(ctx, s.login, s.notifier)
 	}
 	return token, err
 }
@@ -200,7 +226,7 @@ func (s *authorizationLoggingTokenSource) BearerToken(ctx context.Context) (stri
 func (s *authorizationLoggingTokenSource) Refresh(ctx context.Context) error {
 	err := s.source.Refresh(ctx)
 	if errors.Is(err, twitter.ErrAuthorizationRequired) {
-		logTwitterOAuth2AuthorizationRequired(s.login)
+		notifyTwitterOAuth2AuthorizationRequired(ctx, s.login, s.notifier)
 	}
 	return err
 }
@@ -295,7 +321,7 @@ func (s *server) twitterCallbackHandler(w http.ResponseWriter, r *http.Request) 
 		slog.Warn("Twitter OAuth 2.0 authorization failed",
 			slog.String("error", oauthErr),
 			slog.String("error_description", r.URL.Query().Get("error_description")))
-		logTwitterOAuth2AuthorizationRequired(s.twitterOAuth2)
+		notifyTwitterOAuth2AuthorizationRequired(r.Context(), s.twitterOAuth2, s.notifier)
 		return
 	}
 
@@ -309,14 +335,15 @@ func (s *server) twitterCallbackHandler(w http.ResponseWriter, r *http.Request) 
 	if err := s.twitterOAuth2.CompleteLogin(r.Context(), state, code); err != nil {
 		if errors.Is(err, twitter.ErrInvalidOAuth2State) {
 			http.Error(w, "Invalid or expired state; restart Twitter OAuth 2.0 login", http.StatusBadRequest)
-			logTwitterOAuth2AuthorizationRequired(s.twitterOAuth2)
+			notifyTwitterOAuth2AuthorizationRequired(r.Context(), s.twitterOAuth2, s.notifier)
 			return
 		}
 		http.Error(w, "Failed to complete Twitter OAuth 2.0 login", http.StatusBadGateway)
 		slog.Error("Failed to complete Twitter OAuth 2.0 login", slog.Any("error", err))
-		logTwitterOAuth2AuthorizationRequired(s.twitterOAuth2)
+		notifyTwitterOAuth2AuthorizationRequired(r.Context(), s.twitterOAuth2, s.notifier)
 		return
 	}
+	notifyTwitterOAuth2AuthorizationRecovered(r.Context(), s.notifier)
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	if _, err := w.Write([]byte("Twitter OAuth 2.0 authorization completed. You can close this page.\n")); err != nil {
@@ -324,7 +351,7 @@ func (s *server) twitterCallbackHandler(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-func logTwitterOAuth2AuthorizationRequired(login *twitter.OAuth2LoginManager) {
+func notifyTwitterOAuth2AuthorizationRequired(ctx context.Context, login *twitter.OAuth2LoginManager, notifier notify.Notifier) {
 	if login == nil {
 		return
 	}
@@ -336,6 +363,41 @@ func logTwitterOAuth2AuthorizationRequired(login *twitter.OAuth2LoginManager) {
 	slog.Warn("Twitter OAuth 2.0 authorization required",
 		slog.String("login_url", loginURL),
 		slog.Time("expires_at", expiresAt))
+	if notifier == nil {
+		return
+	}
+	if err := notifier.Notify(ctx, notify.Event{
+		Kind:     notify.EventTwitterAuthorizationRequired,
+		Severity: notify.SeverityWarning,
+		Title:    "Twitter OAuth 2.0 の再認証が必要です",
+		Message:  "Note Tweet Connector が Tweet 投稿を続けるには Twitter OAuth 2.0 の再認証が必要です。",
+		Fields: []notify.Field{
+			{Name: "Login URL", Value: loginURL},
+			{Name: "有効期限", Value: expiresAt.UTC().Format(time.RFC3339)},
+		},
+		DedupeKey: "twitter_authorization_required:" + loginURL,
+	}); err != nil {
+		slog.Warn("Failed to send Discord notification", slog.Any("error", err), slog.String("kind", string(notify.EventTwitterAuthorizationRequired)))
+	}
+}
+
+func notifyTwitterOAuth2AuthorizationRecovered(ctx context.Context, notifier notify.Notifier) {
+	if notifier == nil {
+		return
+	}
+	completedAt := time.Now().UTC()
+	if err := notifier.Notify(ctx, notify.Event{
+		Kind:     notify.EventTwitterAuthorizationRecovered,
+		Severity: notify.SeverityInfo,
+		Title:    "Twitter OAuth 2.0 の再認証が完了しました",
+		Message:  "Note Tweet Connector の Twitter OAuth 2.0 user token が保存されました。",
+		Fields: []notify.Field{
+			{Name: "完了時刻", Value: completedAt.Format(time.RFC3339)},
+		},
+		DedupeKey: "twitter_authorization_recovered",
+	}); err != nil {
+		slog.Warn("Failed to send Discord notification", slog.Any("error", err), slog.String("kind", string(notify.EventTwitterAuthorizationRecovered)))
+	}
 }
 
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
@@ -383,8 +445,33 @@ func updateTrackerEntriesMetric(ctx context.Context, crossPostTracker tracker.Cr
 	m.TrackerEntriesTotal.Set(float64(count))
 }
 
-func runTwitterStream(ctx context.Context, streamClient *twitter.StreamClient, cfg handler.Config, crossPostTracker tracker.CrossPostTracker, m *metrics.Metrics, reconnectMin, reconnectMax time.Duration) {
+type streamDisconnectLoopTracker struct {
+	window    time.Duration
+	threshold int
+	events    []time.Time
+}
+
+func (t *streamDisconnectLoopTracker) record(now time.Time) int {
+	if t.window <= 0 || t.threshold <= 0 {
+		return 0
+	}
+	cutoff := now.Add(-t.window)
+	kept := t.events[:0]
+	for _, event := range t.events {
+		if event.After(cutoff) {
+			kept = append(kept, event)
+		}
+	}
+	t.events = append(kept, now)
+	return len(t.events)
+}
+
+func runTwitterStream(ctx context.Context, streamClient *twitter.StreamClient, cfg handler.Config, crossPostTracker tracker.CrossPostTracker, m *metrics.Metrics, reconnectMin, reconnectMax time.Duration, notifier notify.Notifier, loopWindow time.Duration, loopThreshold int) {
 	backoff := reconnectMin
+	loopTracker := &streamDisconnectLoopTracker{
+		window:    loopWindow,
+		threshold: loopThreshold,
+	}
 	onConnect := streamClient.OnConnect
 	streamClient.OnConnect = func() {
 		backoff = reconnectMin
@@ -424,6 +511,10 @@ func runTwitterStream(ctx context.Context, streamClient *twitter.StreamClient, c
 		if sleep > reconnectMax {
 			sleep = reconnectMax
 		}
+		disconnectCount := loopTracker.record(time.Now())
+		if disconnectCount >= loopThreshold {
+			notifyTwitterStreamDisconnectLoop(ctx, notifier, loopWindow, disconnectCount, reason, err, sleep)
+		}
 		if !sleepContext(ctx, sleep) {
 			return
 		}
@@ -433,6 +524,28 @@ func runTwitterStream(ctx context.Context, streamClient *twitter.StreamClient, c
 				backoff = reconnectMax
 			}
 		}
+	}
+}
+
+func notifyTwitterStreamDisconnectLoop(ctx context.Context, notifier notify.Notifier, window time.Duration, disconnectCount int, reason string, streamErr error, reconnectAfter time.Duration) {
+	if notifier == nil {
+		return
+	}
+	if err := notifier.Notify(ctx, notify.Event{
+		Kind:     notify.EventTwitterStreamDisconnectLoop,
+		Severity: notify.SeverityWarning,
+		Title:    "Twitter stream の再接続が続いています",
+		Message:  "Twitter Filtered Stream が短時間に繰り返し切断されています。",
+		Fields: []notify.Field{
+			{Name: "window", Value: window.String()},
+			{Name: "disconnect_count", Value: fmt.Sprintf("%d", disconnectCount)},
+			{Name: "latest_reason", Value: reason},
+			{Name: "reconnect_after", Value: reconnectAfter.String()},
+			{Name: "latest_error", Value: streamErr.Error()},
+		},
+		DedupeKey: "twitter_stream_disconnect_loop",
+	}); err != nil {
+		slog.Warn("Failed to send Discord notification", slog.Any("error", err), slog.String("kind", string(notify.EventTwitterStreamDisconnectLoop)))
 	}
 }
 
@@ -496,6 +609,10 @@ func main() {
 
 	// Initialize metrics
 	m := metrics.New(version)
+	notifier := notify.NewDedupeNotifier(
+		notify.NewDiscordNotifier(cfg.DiscordWebhookURL, cfg.DiscordNotifyTimeout),
+		cfg.DiscordErrorDedupeWindow,
+	)
 
 	crossPostTracker, err := tracker.NewSQLiteCrossPostTracker(ctx, cfg.TrackerDBPath, cfg.TrackerRetention)
 	if err != nil {
@@ -522,12 +639,13 @@ func main() {
 		os.Exit(1)
 	}
 	if tokenManager.AuthorizationRequired() {
-		logTwitterOAuth2AuthorizationRequired(oauth2Login)
+		notifyTwitterOAuth2AuthorizationRequired(ctx, oauth2Login, notifier)
 	}
 	handlerCfg := cfg.handlerConfig(&authorizationLoggingTokenSource{
-		source: tokenManager,
-		login:  oauth2Login,
-	})
+		source:   tokenManager,
+		login:    oauth2Login,
+		notifier: notifier,
+	}, notifier)
 	streamClient := twitter.NewStreamClient(twitter.StaticBearerTokenSource{Token: cfg.TwitterBearerToken})
 	streamClient.KeepAliveTimeout = cfg.TwitterStreamKeepAlive
 	streamClient.OnConnect = func() {
@@ -553,6 +671,7 @@ func main() {
 		cfg:              handlerCfg,
 		misskeySecret:    cfg.MisskeyHookSecret,
 		twitterOAuth2:    oauth2Login,
+		notifier:         notifier,
 	}
 
 	// Main server
@@ -593,7 +712,7 @@ func main() {
 	// Start Twitter stream worker
 	go func() {
 		slog.Info("Starting Twitter Filtered Stream worker")
-		runTwitterStream(ctx, streamClient, handlerCfg, crossPostTracker, m, cfg.TwitterStreamReconnectMin, cfg.TwitterStreamReconnectMax)
+		runTwitterStream(ctx, streamClient, handlerCfg, crossPostTracker, m, cfg.TwitterStreamReconnectMin, cfg.TwitterStreamReconnectMax, notifier, cfg.DiscordStreamLoopWindow, cfg.DiscordStreamLoopThreshold)
 	}()
 
 	// Graceful shutdown

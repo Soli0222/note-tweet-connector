@@ -5,3 +5,4 @@
 - Keep literal protocol/header/API field names unchanged when they are externally defined, such as `X-Misskey-Hook-Secret`, `X-Upload-Content-Type`, and `x-twitter-webhooks-signature`.
 - Keep `README.md` up to date.
 - Before considering code changes complete, run both `go test ./...` and `golangci-lint run`.
+- The output file `tmp.md` should be in Japanese.

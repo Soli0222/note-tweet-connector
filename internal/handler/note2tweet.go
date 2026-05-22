@@ -222,6 +222,7 @@ func Note2TweetHandlerWithConfig(ctx context.Context, cfg Config, data []byte, c
 		slog.Error("Failed to post note to tweet",
 			slog.String("note_id", noteID),
 			slog.Any("error", err))
+		notifyTwitterFailure(ctx, cfg, noteID, err, len(fileURLs), quoteTweetID)
 		m.Note2TweetErrors.Inc()
 		return err
 	}

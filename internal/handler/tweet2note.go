@@ -10,6 +10,7 @@ import (
 
 	"github.com/Soli0222/note-tweet-connector/internal/metrics"
 	"github.com/Soli0222/note-tweet-connector/internal/misskey"
+	"github.com/Soli0222/note-tweet-connector/internal/notify"
 	"github.com/Soli0222/note-tweet-connector/internal/tracker"
 	"github.com/Soli0222/note-tweet-connector/internal/twitter"
 )
@@ -34,6 +35,7 @@ type Config struct {
 	TwitterUsername          string
 	TwitterMediaAllowedHosts []string
 	Twitter                  twitter.Config
+	Notifier                 notify.Notifier
 }
 
 type filteredStreamPayload struct {
@@ -208,6 +210,7 @@ func HandleIncomingTweetWithConfig(ctx context.Context, cfg Config, tweet Incomi
 				slog.Error("Failed to upload tweet media to Misskey Drive",
 					slog.String("media_url", tweet.MediaURLs[i]),
 					slog.Any("error", err))
+				notifyMisskeyFailure(ctx, cfg, "upload drive file", tweet.ID, err, i)
 				m.Tweet2NoteErrors.Inc()
 				return err
 			}
@@ -246,6 +249,7 @@ func HandleIncomingTweetWithConfig(ctx context.Context, cfg Config, tweet Incomi
 		m.Tweet2NoteSuccess.Inc()
 	} else {
 		slog.Error("Failed to post tweet to note", slog.Any("error", err))
+		notifyMisskeyFailure(ctx, cfg, "create note", tweet.ID, err, -1)
 		m.Tweet2NoteErrors.Inc()
 		return err
 	}
