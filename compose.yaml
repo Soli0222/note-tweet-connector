@@ -13,6 +13,11 @@ services:
       - -twitter-bearer-token=${TWITTER_BEARER_TOKEN:?TWITTER_BEARER_TOKEN is required}
       - -twitter-stream-keep-alive-timeout=${TWITTER_STREAM_KEEP_ALIVE_TIMEOUT:-90s}
       - -twitter-username=${TWITTER_USERNAME:?TWITTER_USERNAME is required}
+      - -discord-webhook-url=${DISCORD_WEBHOOK_URL:-}
+      - -discord-notify-timeout=${DISCORD_NOTIFY_TIMEOUT:-5s}
+      - -discord-stream-loop-window=${DISCORD_STREAM_LOOP_WINDOW:-10m}
+      - -discord-stream-loop-threshold=${DISCORD_STREAM_LOOP_THRESHOLD:-5}
+      - -discord-error-dedupe-window=${DISCORD_ERROR_DEDUPE_WINDOW:-10m}
     ports:
       - "8080:8080"
       - "9090:9090"

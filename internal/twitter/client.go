@@ -56,6 +56,47 @@ type PostOptions struct {
 	QuoteTweetID string
 }
 
+type APIError struct {
+	Operation   string
+	Command     string
+	StatusCode  int
+	BodyPreview string
+	Guidance    string
+	Err         error
+}
+
+func (e *APIError) Error() string {
+	operation := e.Operation
+	if operation == "" {
+		operation = "request"
+	}
+	if e.StatusCode > 0 {
+		if e.Command != "" {
+			message := fmt.Sprintf("%s %s failed with status %d", operation, e.Command, e.StatusCode)
+			if e.BodyPreview != "" {
+				message += ": " + e.BodyPreview
+			}
+			if e.Guidance != "" {
+				message += "; " + e.Guidance
+			}
+			return message
+		}
+		message := fmt.Sprintf("twitter %s failed with status %d", operation, e.StatusCode)
+		if e.BodyPreview != "" {
+			message += ": " + e.BodyPreview
+		}
+		return message
+	}
+	if e.Err != nil {
+		return fmt.Sprintf("twitter %s failed: %v", operation, e.Err)
+	}
+	return fmt.Sprintf("twitter %s failed", operation)
+}
+
+func (e *APIError) Unwrap() error {
+	return e.Err
+}
+
 type Config struct {
 	OAuth2ClientID    string
 	OAuth2RedirectURL string
@@ -217,7 +258,11 @@ func postTweet(ctx context.Context, tokenSource BearerTokenSource, text string, 
 
 	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
 		slog.Error("Non-OK response from Twitter", slog.Int("status", statusCode))
-		return "", fmt.Errorf("twitter POST request failed with status %d: %s", statusCode, previewBody(respBytes))
+		return "", &APIError{
+			Operation:   "POST request",
+			StatusCode:  statusCode,
+			BodyPreview: previewBody(respBytes),
+		}
 	}
 
 	var postResp struct {
@@ -260,7 +305,10 @@ func uploadMediaFromURL(ctx context.Context, cfg Config, fileURL string) (string
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("media download failed with status %d", resp.StatusCode)
+		return "", &APIError{
+			Operation:  "media download",
+			StatusCode: resp.StatusCode,
+		}
 	}
 
 	mediaBytes, err := io.ReadAll(resp.Body)
@@ -596,9 +644,20 @@ func mediaUploadRequestError(command string, statusCode int, respBytes []byte) e
 		command = "request"
 	}
 	if statusCode == http.StatusForbidden {
-		return fmt.Errorf("media upload %s failed with status %d: %s; verify the Twitter OAuth 2.0 user token was authorized with media.write, tweet.write, and offline.access scopes and that the developer app has Media API access", command, statusCode, detail)
+		return &APIError{
+			Operation:   "media upload",
+			Command:     command,
+			StatusCode:  statusCode,
+			BodyPreview: detail,
+			Guidance:    "verify the Twitter OAuth 2.0 user token was authorized with media.write, tweet.write, and offline.access scopes and that the developer app has Media API access",
+		}
 	}
-	return fmt.Errorf("media upload %s failed with status %d: %s", command, statusCode, detail)
+	return &APIError{
+		Operation:   "media upload",
+		Command:     command,
+		StatusCode:  statusCode,
+		BodyPreview: detail,
+	}
 }
 
 func mediaCategoryForType(mediaType string) (string, error) {

@@ -28,6 +28,35 @@ type CreateNoteOptions struct {
 	RenoteID string
 }
 
+type APIError struct {
+	Operation   string
+	StatusCode  int
+	BodyPreview string
+	Err         error
+}
+
+func (e *APIError) Error() string {
+	operation := e.Operation
+	if operation == "" {
+		operation = "request"
+	}
+	if e.StatusCode > 0 {
+		message := fmt.Sprintf("misskey %s failed with status %d", operation, e.StatusCode)
+		if e.BodyPreview != "" {
+			message += ": " + e.BodyPreview
+		}
+		return message
+	}
+	if e.Err != nil {
+		return fmt.Sprintf("misskey %s failed: %v", operation, e.Err)
+	}
+	return fmt.Sprintf("misskey %s failed", operation)
+}
+
+func (e *APIError) Unwrap() error {
+	return e.Err
+}
+
 // CreateNote creates a new note on Misskey
 func CreateNote(ctx context.Context, host, token, text string) (string, error) {
 	return CreateNoteWithOptions(ctx, host, token, CreateNoteOptions{Text: text})
@@ -84,7 +113,11 @@ func CreateNoteWithOptions(ctx context.Context, host, token string, options Crea
 			slog.Int("status_code", resp.StatusCode),
 			slog.String("status", resp.Status),
 			slog.String("endpoint", endpoint))
-		return "", fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, string(respBytes))
+		return "", &APIError{
+			Operation:   "create note",
+			StatusCode:  resp.StatusCode,
+			BodyPreview: previewBody(respBytes),
+		}
 	}
 
 	var createResp struct {
@@ -162,7 +195,11 @@ func UploadDriveFileFromURLWithAllowedHosts(ctx context.Context, host, token, fi
 		return "", err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("drive file upload failed with status %d: %s", resp.StatusCode, string(respBytes))
+		return "", &APIError{
+			Operation:   "upload drive file",
+			StatusCode:  resp.StatusCode,
+			BodyPreview: previewBody(respBytes),
+		}
 	}
 
 	var driveFile struct {
@@ -250,4 +287,13 @@ func filenameFromURL(fileURL string) string {
 		return "media"
 	}
 	return filename
+}
+
+func previewBody(body []byte) string {
+	const limit = 512
+	preview := strings.TrimSpace(string(body))
+	if len(preview) > limit {
+		return preview[:limit] + "..."
+	}
+	return preview
 }
