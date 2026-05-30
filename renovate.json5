@@ -2,10 +2,10 @@
   $schema: 'https://docs.renovatebot.com/renovate-schema.json',
   extends: [
     'config:recommended',
+    'security:minimumReleaseAgeNpm',
     ':dependencyDashboard',
   ],
   timezone: 'Asia/Tokyo',
-  minimumReleaseAge: '3 days',
   rangeStrategy: 'bump',
   prConcurrentLimit: 20,
   prHourlyLimit: 10,
