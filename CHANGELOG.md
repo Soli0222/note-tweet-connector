@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.1](https://github.com/Soli0222/note-tweet-connector/compare/v3.3.0...v3.3.1) (2026-08-08)
+
+
+### バグ修正・依存関係の更新
+
+* bump builder image to golang 1.26.5 to match go.mod ([#133](https://github.com/Soli0222/note-tweet-connector/issues/133)) ([8ecd947](https://github.com/Soli0222/note-tweet-connector/commit/8ecd947eee417989d3c3cc42d3e64119420b1f4b))
+
 ## [3.3.0](https://github.com/Soli0222/note-tweet-connector/compare/v3.2.1...v3.3.0) (2026-08-08)
 
 
