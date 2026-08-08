@@ -1,0 +1,103 @@
+name: Publish Helm chart
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'charts/**'
+
+jobs:
+  chart:
+    name: Bump and publish chart
+    runs-on: ubuntu-latest
+    # The bump-and-commit step below pushes a chart-only commit back to main,
+    # which would otherwise re-trigger this same workflow. Skip runs whose
+    # head commit carries the marker that step adds.
+    if: ${{ !contains(github.event.head_commit.message, '[skip-chart-bump]') }}
+    permissions:
+      contents: write
+      packages: write
+    env:
+      CHART_DIR: charts/note-tweet-connector
+      CHART_NAME: note-tweet-connector
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v6.0.2
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5.0.1
+
+      - name: Bump chart version
+        id: bump
+        run: |
+          set -euo pipefail
+          CURRENT=$(awk -F': ' '/^version:/ {print $2}' "${CHART_DIR}/Chart.yaml")
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          NEW="${MAJOR}.${MINOR}.$((PATCH + 1))"
+          sed -i "s/^version: .*/version: ${NEW}/" "${CHART_DIR}/Chart.yaml"
+          echo "version=${NEW}" >> "$GITHUB_OUTPUT"
+
+      - name: Read appVersion
+        id: appversion
+        run: |
+          set -euo pipefail
+          APP_VERSION=$(awk -F'[: "]+' '/^appVersion:/ {print $2}' "${CHART_DIR}/Chart.yaml")
+          echo "version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
+
+      # The chart's appVersion (and therefore the image tag it resolves to by
+      # default) may point at an image that is still being built by the
+      # release workflow in parallel (release-please's own commit already
+      # bumped appVersion before the image build finishes). Refuse to publish
+      # a chart pointing at an image that doesn't exist yet.
+      - name: Wait for the app image to be published
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/${{ env.CHART_NAME }}:${{ steps.appversion.outputs.version }}
+        run: |
+          set -euo pipefail
+          IMAGE="${IMAGE,,}"
+          for i in $(seq 1 20); do
+            if docker buildx imagetools inspect "$IMAGE" >/dev/null 2>&1; then
+              echo "found $IMAGE"
+              exit 0
+            fi
+            echo "waiting for $IMAGE to be published (attempt $i/20)..."
+            sleep 30
+          done
+          echo "::error::$IMAGE was not found after waiting; refusing to publish a chart pointing at a non-existent image"
+          exit 1
+
+      - name: Log in to the ghcr.io registry (helm)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Package chart
+        run: |
+          set -euo pipefail
+          helm package "${CHART_DIR}" --destination dist
+
+      - name: Push chart
+        env:
+          V: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          helm push "dist/${CHART_NAME}-${V}.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"
+
+      - name: Verify chart is resolvable
+        env:
+          V: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          helm show chart "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts/${CHART_NAME}" --version "$V"
+
+      - name: Commit chart version bump
+        env:
+          V: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${CHART_DIR}/Chart.yaml"
+          git commit -m "chore(chart): bump chart version to ${V} [skip-chart-bump]"
+          git pull --rebase origin main
+          git push origin HEAD:main
