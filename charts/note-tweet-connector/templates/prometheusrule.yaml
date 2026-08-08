@@ -1,0 +1,63 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "chart.fullname" . }}
+  {{- if .Values.monitoring.prometheusRule.namespace }}
+  namespace: {{ .Values.monitoring.prometheusRule.namespace }}
+  {{- end }}
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.monitoring.prometheusRule.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  groups:
+    - name: {{ include "chart.fullname" . }}
+      rules:
+        {{- if .Values.monitoring.prometheusRule.rules.serviceDown.enabled }}
+        - alert: NoteTweetConnectorDown
+          expr: up{job="{{ include "chart.fullname" . }}"} == 0
+          for: {{ .Values.monitoring.prometheusRule.rules.serviceDown.for }}
+          labels:
+            severity: {{ .Values.monitoring.prometheusRule.rules.serviceDown.severity }}
+          annotations:
+            summary: "Note Tweet Connector is down"
+            description: "Note Tweet Connector instance {{ "{{" }} $labels.instance {{ "}}" }} has been down for more than {{ .Values.monitoring.prometheusRule.rules.serviceDown.for }}."
+        {{- end }}
+
+        {{- if .Values.monitoring.prometheusRule.rules.errorRate.enabled }}
+        - alert: NoteTweetConnectorHighErrorRate
+          expr: |
+            (
+              sum(rate(webhook_request_errors_total{job="{{ include "chart.fullname" . }}"}[5m])) /
+              sum(rate(webhook_requests_total{job="{{ include "chart.fullname" . }}"}[5m]))
+            ) * 100 > {{ .Values.monitoring.prometheusRule.rules.errorRate.threshold }}
+          for: {{ .Values.monitoring.prometheusRule.rules.errorRate.for }}
+          labels:
+            severity: {{ .Values.monitoring.prometheusRule.rules.errorRate.severity }}
+          annotations:
+            summary: "Note Tweet Connector high error rate"
+            description: "Note Tweet Connector error rate is above {{ .Values.monitoring.prometheusRule.rules.errorRate.threshold }}% for more than {{ .Values.monitoring.prometheusRule.rules.errorRate.for }}."
+        {{- end }}
+
+        {{- if .Values.monitoring.prometheusRule.rules.slowProcessing.enabled }}
+        - alert: NoteTweetConnectorSlowProcessing
+          expr: |
+            histogram_quantile(0.95, sum(rate(webhook_request_duration_seconds_bucket{job="{{ include "chart.fullname" . }}"}[5m])) by (le)) > {{ .Values.monitoring.prometheusRule.rules.slowProcessing.threshold }}
+          for: {{ .Values.monitoring.prometheusRule.rules.slowProcessing.for }}
+          labels:
+            severity: {{ .Values.monitoring.prometheusRule.rules.slowProcessing.severity }}
+          annotations:
+            summary: "Note Tweet Connector slow processing"
+            description: "Note Tweet Connector 95th percentile request duration is above {{ .Values.monitoring.prometheusRule.rules.slowProcessing.threshold }}s for more than {{ .Values.monitoring.prometheusRule.rules.slowProcessing.for }}."
+        {{- end }}
+
+        {{- with .Values.monitoring.prometheusRule.additionalRules }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}

@@ -1,0 +1,123 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "chart.fullname" . }}
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "chart.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "chart.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "chart.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "-port={{ .Values.args.port }}"
+            - "-metrics-port={{ .Values.args.metricsPort }}"
+            - "-tracker-db-path={{ .Values.args.trackerDbPath }}"
+            - "-tracker-retention={{ .Values.args.trackerRetention }}"
+            - "-read-timeout={{ .Values.args.readTimeout }}"
+            - "-write-timeout={{ .Values.args.writeTimeout }}"
+            - "-idle-timeout={{ .Values.args.idleTimeout }}"
+            - "-shutdown-timeout={{ .Values.args.shutdownTimeout }}"
+            - "-log-level={{ .Values.args.logLevel }}"
+            - "-misskey-hook-secret=$(MISSKEY_HOOK_SECRET)"
+            - "-misskey-host=$(MISSKEY_HOST)"
+            - "-misskey-token=$(MISSKEY_TOKEN)"
+            - "-misskey-media-host=$(MISSKEY_MEDIA_HOST)"
+            - "-twitter-media-hosts={{ .Values.args.twitterMediaHosts }}"
+            - "-twitter-oauth2-client-id=$(TWITTER_OAUTH2_CLIENT_ID)"
+            - "-twitter-oauth2-redirect-url={{ .Values.args.twitterOAuth2RedirectURL }}"
+            - "-twitter-token-store-path={{ .Values.args.twitterTokenStorePath }}"
+            - "-twitter-bearer-token=$(TWITTER_BEARER_TOKEN)"
+            - "-twitter-stream-keep-alive-timeout={{ .Values.args.twitterStreamKeepAliveTimeout }}"
+            - "-twitter-username={{ .Values.args.twitterUsername }}"
+            {{- if .Values.discord.enabled }}
+            - "-discord-webhook-url=$(DISCORD_WEBHOOK_URL)"
+            - "-discord-notify-timeout={{ .Values.discord.notifyTimeout }}"
+            - "-discord-stream-loop-window={{ .Values.discord.streamLoopWindow }}"
+            - "-discord-stream-loop-threshold={{ .Values.discord.streamLoopThreshold }}"
+            - "-discord-error-dedupe-window={{ .Values.discord.errorDedupeWindow }}"
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.args.port }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.args.metricsPort }}
+              protocol: TCP
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            {{- range .Values.secrets.env }}
+            {{- if or (not .enabledWhenDiscord) $.Values.discord.enabled }}
+            - name: {{ .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName | default (include "chart.secretName" $) }}
+                  key: {{ .key }}
+                  {{- if .optional }}
+                  optional: {{ .optional }}
+                  {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- range .Values.env }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.persistence.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath | quote }}
+          {{- end }}
+      {{- if .Values.persistence.enabled }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "chart.fullname" .)) }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
