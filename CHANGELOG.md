@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.3.0](https://github.com/Soli0222/note-tweet-connector/compare/v3.2.1...v3.3.0) (2026-08-08)
+
+
+### 新機能
+
+* publish helm chart as OCI artifact from this repo ([#132](https://github.com/Soli0222/note-tweet-connector/issues/132)) ([ecffe34](https://github.com/Soli0222/note-tweet-connector/commit/ecffe34d6a19bf5c75dfffbda20453a4daddd127))
+
+
+### バグ修正・依存関係の更新
+
+* **deps:** update go modernc.org/sqlite to v1.56.0 ([#130](https://github.com/Soli0222/note-tweet-connector/issues/130)) ([164fa15](https://github.com/Soli0222/note-tweet-connector/commit/164fa154f295f9a2d4cfe25bc75ef6c21144aa00))
+
 ## [3.2.1](https://github.com/Soli0222/note-tweet-connector/compare/3.2.0...v3.2.1) (2026-07-29)
 
 
