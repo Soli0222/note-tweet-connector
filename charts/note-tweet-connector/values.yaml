@@ -1,0 +1,272 @@
+# Default values for note-tweet-connector.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Application metadata
+nameOverride: ""
+fullnameOverride: ""
+
+# Image configuration
+image:
+  repository: ghcr.io/soli0222/note-tweet-connector
+  tag: ""  # Defaults to appVersion if not set
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Service account configuration
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# Pod security context
+podSecurityContext:
+  fsGroup: 10001
+
+# Container security context
+securityContext:
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 10001
+
+# Deployment configuration
+replicaCount: 1
+
+# Command line options for the application
+# See: https://github.com/Soli0222/note-tweet-connector
+args:
+  # Webhook server port
+  port: 8080
+  # Metrics server port
+  metricsPort: 9090
+  # CrossPostTracker sqlite database path
+  trackerDbPath: "/app/data/tracker.sqlite"
+  # CrossPostTracker retention duration. Set to 0 or a negative duration to keep records indefinitely.
+  trackerRetention: "2160h"
+  # HTTP read timeout
+  readTimeout: "15s"
+  # HTTP write timeout
+  writeTimeout: "15s"
+  # HTTP idle timeout
+  idleTimeout: "60s"
+  # Graceful shutdown timeout
+  shutdownTimeout: "30s"
+  # Log level (debug, info, warn, error)
+  logLevel: "info"
+  # Twitter media hosts allowed for Misskey uploads. Comma-separated.
+  twitterMediaHosts: "pbs.twimg.com,video.twimg.com"
+  # OAuth 2.0 callback URL registered in the Twitter Developer Portal.
+  twitterOAuth2RedirectURL: "https://example.tld/twitter/callback"
+  # OAuth 2.0 token store path. The file is persisted when persistence.enabled is true.
+  twitterTokenStorePath: "/app/data/twitter_oauth2_token.json"
+  # Twitter stream keep-alive timeout.
+  twitterStreamKeepAliveTimeout: "90s"
+  # Twitter username used to generate the Filtered Stream rule.
+  twitterUsername: ""
+
+# Discord notification configuration
+discord:
+  # Enable Discord operator notifications.
+  enabled: false
+  # Discord notification request timeout.
+  notifyTimeout: "5s"
+  # Window for Twitter stream disconnect loop notification.
+  streamLoopWindow: "10m"
+  # Disconnect count threshold for Twitter stream loop notification.
+  streamLoopThreshold: 5
+  # Duration to suppress duplicate Discord error notifications.
+  errorDedupeWindow: "10m"
+
+# CrossPostTracker sqlite storage
+persistence:
+  enabled: true
+  mountPath: /app/data
+  accessModes:
+    - ReadWriteOnce
+  size: 1Gi
+  storageClass: ""
+  annotations: {}
+  existingClaim: ""
+
+# Service configuration
+service:
+  # Main webhook service
+  type: ClusterIP
+  port: 8080
+
+# Metrics service configuration
+metricsService:
+  # Enable separate metrics service
+  enabled: true
+  type: ClusterIP
+  port: 9090
+
+# Resource limits and requests
+resources: {}
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+# Node selection
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod labels
+podLabels: {}
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: example.tld
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+  #  - secretName: note-tweet-connector-tls
+  #    hosts:
+  #      - example.tld
+
+# Secret configuration
+secrets:
+  # Name of the external secret containing application secrets
+  # If not specified, a name is generated using the fullname template
+  secretName: ""
+  # Environment variables to load from secret
+  env:
+    - name: MISSKEY_HOOK_SECRET
+      key: MISSKEY_HOOK_SECRET
+    - name: MISSKEY_HOST
+      key: MISSKEY_HOST
+    - name: MISSKEY_TOKEN
+      key: MISSKEY_TOKEN
+    - name: MISSKEY_MEDIA_HOST
+      key: MISSKEY_MEDIA_HOST
+    - name: TWITTER_OAUTH2_CLIENT_ID
+      key: TWITTER_OAUTH2_CLIENT_ID
+    - name: TWITTER_BEARER_TOKEN
+      key: TWITTER_BEARER_TOKEN
+    - name: DISCORD_WEBHOOK_URL
+      key: DISCORD_WEBHOOK_URL
+      enabledWhenDiscord: true
+
+# Additional environment variables (not from secrets)
+env: []
+# - name: EXAMPLE_VAR
+#   value: "example-value"
+
+# Health checks
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# Monitoring configuration
+monitoring:
+  # ServiceMonitor configuration (requires Prometheus Operator)
+  serviceMonitor:
+    # Enable ServiceMonitor creation
+    enabled: false
+    # Namespace to create ServiceMonitor in (defaults to release namespace)
+    namespace: ""
+    # Additional labels for ServiceMonitor
+    labels: {}
+    # Annotations for ServiceMonitor
+    annotations: {}
+    # Job label for ServiceMonitor
+    jobLabel: ""
+    # Additional selector labels
+    selector: {}
+    # Scrape interval
+    interval: "30s"
+    # Scrape timeout
+    scrapeTimeout: "10s"
+    # Metrics path
+    path: "/metrics"
+    # Relabelings
+    relabelings: []
+    # Metric relabelings
+    metricRelabelings: []
+
+  # PrometheusRule configuration (requires Prometheus Operator)
+  prometheusRule:
+    # Enable PrometheusRule creation
+    enabled: false
+    # Namespace to create PrometheusRule in (defaults to release namespace)
+    namespace: ""
+    # Additional labels for PrometheusRule
+    labels: {}
+    # Annotations for PrometheusRule
+    annotations: {}
+    # Alert rules
+    rules:
+      # High error rate alert
+      errorRate:
+        enabled: true
+        # Alert threshold (percentage)
+        threshold: 5
+        # Duration before alerting
+        for: "5m"
+        # Severity level
+        severity: "warning"
+      # Webhook processing duration alert
+      slowProcessing:
+        enabled: true
+        # Alert threshold (seconds)
+        threshold: 10
+        # Duration before alerting
+        for: "5m"
+        # Severity level
+        severity: "warning"
+      # Service down alert
+      serviceDown:
+        enabled: true
+        # Duration before alerting
+        for: "5m"
+        # Severity level
+        severity: "critical"
+    # Additional custom rules
+    additionalRules: []
+    # - alert: CustomAlert
+    #   expr: custom_metric > 100
+    #   for: 5m
+    #   labels:
+    #     severity: warning
+    #   annotations:
+    #     summary: "Custom alert triggered"
