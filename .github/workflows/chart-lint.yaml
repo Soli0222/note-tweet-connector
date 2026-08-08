@@ -15,7 +15,7 @@ jobs:
       CHART_DIR: charts/note-tweet-connector
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v6.1.0
 
       - name: Set up Helm
         uses: azure/setup-helm@v5.0.1
