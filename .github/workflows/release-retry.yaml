@@ -56,7 +56,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: Soli0222/shared-workflows/.github/workflows/publish-image.yaml@75c1e8b572ce9ea8ad611d68232cb922a19acdeb
+    uses: Soli0222/shared-workflows/.github/workflows/publish-image.yaml@119de6bc19fdd3e2d77f0decb8bd5bd976a7a645
     with:
       ref: ${{ needs.resolve.outputs.sha }}
       version: ${{ inputs.version }}
@@ -67,6 +67,6 @@ jobs:
     permissions:
       contents: write
       packages: write
-    uses: Soli0222/shared-workflows/.github/workflows/publish-chart.yaml@75c1e8b572ce9ea8ad611d68232cb922a19acdeb
+    uses: Soli0222/shared-workflows/.github/workflows/publish-chart.yaml@119de6bc19fdd3e2d77f0decb8bd5bd976a7a645
     with:
       api-versions: monitoring.coreos.com/v1
