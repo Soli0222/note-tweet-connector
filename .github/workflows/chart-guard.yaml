@@ -14,4 +14,4 @@ jobs:
     name: Guard chart version
     permissions:
       contents: read
-    uses: Soli0222/shared-workflows/.github/workflows/chart-guard.yaml@75c1e8b572ce9ea8ad611d68232cb922a19acdeb
+    uses: Soli0222/shared-workflows/.github/workflows/chart-guard.yaml@119de6bc19fdd3e2d77f0decb8bd5bd976a7a645
