@@ -1,0 +1,67 @@
+name: Release Pipeline
+
+# アプリのリリース1回分を1つの run で表す DAG。
+# release-please → image publish → chart publish を needs で繋ぐ。
+#
+# 以前は release-please と image build と chart publish が別イベントで起動する
+# 並列 run に分かれており、chart が image を最大10分 polling して待っていた。
+# image build が10分を超えると chart は失敗したままになり、image を rerun しても
+# chart は再起動しなかった。
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release-created: ${{ steps.release.outputs.release_created }}
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          client-id: ${{ secrets.RENOVATE_CLIENT_ID }}
+          private-key: ${{ secrets.RENOVATE_PRIVATE_KEY }}
+
+      - name: Release Please
+        id: release
+        uses: googleapis/release-please-action@v5.0.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ steps.app-token.outputs.token }}
+
+  publish-image:
+    name: Publish Application Image
+    needs: release-please
+    if: needs.release-please.outputs.release-created == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: Soli0222/shared-workflows/.github/workflows/publish-image.yaml@30e0e231e39254bcc183366ec2a37f6ea0193bce
+    with:
+      ref: ${{ needs.release-please.outputs.sha }}
+      version: ${{ needs.release-please.outputs.version }}
+
+  # image が publish できてから chart を動かす。chart は「この release の chart」を
+  # 作るのではなく、main 上の最新 chart を OCI へ収束させる調停処理なので inputs に
+  # release の version は渡さない。
+  publish-chart:
+    name: Publish Helm Chart
+    needs: [release-please, publish-image]
+    permissions:
+      contents: write
+      packages: write
+    uses: Soli0222/shared-workflows/.github/workflows/publish-chart.yaml@30e0e231e39254bcc183366ec2a37f6ea0193bce
+    with:
+      api-versions: monitoring.coreos.com/v1
