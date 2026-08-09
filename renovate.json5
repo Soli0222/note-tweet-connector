@@ -29,6 +29,17 @@
     {
       customType: 'regex',
       managerFilePatterns: [
+        '/^charts/.+/values\\.yaml$/',
+      ],
+      matchStrings: [
+        'repository:\\s*(?<depName>[^\\s]+)\\s+tag:\\s*["\'](?<currentValue>[^"\']+)["\']',
+      ],
+      datasourceTemplate: 'docker',
+      versioningTemplate: 'docker',
+    },
+    {
+      customType: 'regex',
+      managerFilePatterns: [
         '/go\\.mod$/',
       ],
       matchStrings: [
@@ -38,7 +49,58 @@
       datasourceTemplate: 'golang-version',
     },
   ],
+  // chart の image tag を上げたら同じ PR で chart version の patch を上げる。
+  // これが無いと chart-guard の経路 B が成立しない。
+  // experimental な機能なので renovate のバージョン更新時は挙動を確認する。
+  bumpVersions: [
+    {
+      filePatterns: [
+        '{{packageFileDir}}/Chart.yaml',
+      ],
+      matchStrings: [
+        '(?:^|\\n)version:\\s*(?<version>[^\\s]+)',
+      ],
+      bumpType: 'patch',
+    },
+  ],
   packageRules: [
+    {
+      matchManagers: [
+        'custom.regex',
+      ],
+      matchFileNames: [
+        'charts/**/values.yaml',
+      ],
+      commitMessageTopic: 'Chart image {{depName}}',
+      // fix(chart) だと release-please がアプリのリリースとして拾ってしまい、
+      // コードが1行も変わっていないのに依存イメージのタグを上げただけで
+      // アプリのリリースが発生する。chart の変更は chart の publish だけで完結させる。
+      semanticCommitType: 'chore',
+      semanticCommitScope: 'chart',
+      addLabels: [
+        'chart',
+      ],
+      // 経路 B (image tag だけの変更 + chart version の patch bump)。
+      // chart-guard が分類を強制するので automerge して良い。
+      automerge: true,
+      automergeType: 'pr',
+      platformAutomerge: false,
+    },
+    {
+      matchManagers: [
+        'custom.regex',
+      ],
+      matchFileNames: [
+        'charts/**/values.yaml',
+      ],
+      matchUpdateTypes: [
+        'major',
+      ],
+      automerge: false,
+      addLabels: [
+        'major-update',
+      ],
+    },
     {
       matchDepNames: [
         'golang',

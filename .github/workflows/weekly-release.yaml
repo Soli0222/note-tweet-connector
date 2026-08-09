@@ -1,4 +1,4 @@
-name: Weekly Auto Release
+name: Weekly Release PR Merge
 
 on:
   schedule:
