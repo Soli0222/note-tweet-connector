@@ -176,13 +176,13 @@ CrossPostTrackerのsqlite DBはコンテナ内の`/app/data/tracker.sqlite`に�
 
 ## Kubernetes
 
-Helm Chartは https://github.com/Soli0222/helm-charts で公開されています。
+Helm Chartはこのリポジトリの `charts/note-tweet-connector/` にあり、`oci://ghcr.io/soli0222/charts` へ publish されています。
 
 ```bash
-helm repo add soli0222 https://soli0222.github.io/helm-charts
-helm repo update
-helm install note-tweet-connector soli0222/note-tweet-connector -f values.yaml
+helm install note-tweet-connector oci://ghcr.io/soli0222/charts/note-tweet-connector -f values.yaml
 ```
+
+chart の `version` と `appVersion` は別物です。`version` は chart 自体の変更に対して上がり、`appVersion` がアプリの release タグを指します。
 
 ## 連携設定
 
