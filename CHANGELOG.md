@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.4.0](https://github.com/Soli0222/note-tweet-connector/compare/v3.3.1...v3.4.0) (2026-08-14)
+
+
+### 新機能
+
+* **ci:** rebuild the release pipeline as a DAG on shared workflows ([#138](https://github.com/Soli0222/note-tweet-connector/issues/138)) ([995f72e](https://github.com/Soli0222/note-tweet-connector/commit/995f72e0557dde0debe1bba5079c55097a90d14a))
+
+
+### バグ修正・依存関係の更新
+
+* **deps:** update go go to v1.26.6 ([#144](https://github.com/Soli0222/note-tweet-connector/issues/144)) ([dfd69f5](https://github.com/Soli0222/note-tweet-connector/commit/dfd69f58e9b52f2f703e2af1b1ac5cfeaa599c93))
+
 ## [3.3.1](https://github.com/Soli0222/note-tweet-connector/compare/v3.3.0...v3.3.1) (2026-08-08)
 
 
