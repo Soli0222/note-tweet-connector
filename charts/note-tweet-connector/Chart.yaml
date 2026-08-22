@@ -4,5 +4,5 @@ description: A Helm chart for the Note Tweet Connector
 type: application
 sources:
   - https://github.com/Soli0222/note-tweet-connector
-version: 2.3.1
+version: 2.3.2
 appVersion: 3.4.1
