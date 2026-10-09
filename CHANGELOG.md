@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.4.5](https://github.com/Soli0222/note-tweet-connector/compare/v3.4.4...v3.4.5) (2026-10-09)
+
+
+### バグ修正・依存関係の更新
+
+* **deps:** update go github.com/prometheus/client_golang to v1.25.0 ([#172](https://github.com/Soli0222/note-tweet-connector/issues/172)) ([63d6a9c](https://github.com/Soli0222/note-tweet-connector/commit/63d6a9c75d63e44706c73a2f9b00d045fe01ef33))
+* **deps:** update go go to v1.27.2 ([#171](https://github.com/Soli0222/note-tweet-connector/issues/171)) ([895475f](https://github.com/Soli0222/note-tweet-connector/commit/895475fad5cc9aaca7e651cb97b051439ff102b4))
+
 ## [3.4.4](https://github.com/Soli0222/note-tweet-connector/compare/v3.4.3...v3.4.4) (2026-09-29)
 
 
