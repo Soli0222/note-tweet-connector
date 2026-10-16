@@ -80,6 +80,6 @@ jobs:
     permissions:
       contents: write
       packages: write
-    uses: Soli0222/shared-workflows/.github/workflows/publish-chart.yaml@v1.0.0
+    uses: Soli0222/shared-workflows/.github/workflows/publish-chart.yaml@v1.0.1
     with:
       api-versions: monitoring.coreos.com/v1
