@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.6](https://github.com/Soli0222/note-tweet-connector/compare/v3.4.5...v3.4.6) (2026-10-16)
+
+
+### バグ修正・依存関係の更新
+
+* **ci:** restore Renovate status checks and surface errors ([#176](https://github.com/Soli0222/note-tweet-connector/issues/176)) ([8acb67e](https://github.com/Soli0222/note-tweet-connector/commit/8acb67e639e23e2bce0a1f020af8848af57c8a5a))
+
 ## [3.4.5](https://github.com/Soli0222/note-tweet-connector/compare/v3.4.4...v3.4.5) (2026-10-09)
 
 
