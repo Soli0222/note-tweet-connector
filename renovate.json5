@@ -5,6 +5,7 @@
     'security:minimumReleaseAgeNpm',
     ':dependencyDashboard',
   ],
+  pinDigests: false,
   timezone: 'Asia/Tokyo',
   rangeStrategy: 'bump',
   prConcurrentLimit: 20,
