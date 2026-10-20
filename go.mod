@@ -1,6 +1,6 @@
 module github.com/Soli0222/note-tweet-connector
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/prometheus/client_golang v1.25.0
