@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/prometheus/client_golang v1.25.0
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.61.1
 )
 
 require (
