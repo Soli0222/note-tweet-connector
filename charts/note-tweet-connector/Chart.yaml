@@ -5,4 +5,4 @@ type: application
 sources:
   - https://github.com/Soli0222/note-tweet-connector
 version: 2.3.7
-appVersion: 3.4.7
+appVersion: 3.4.8
