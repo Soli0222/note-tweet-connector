@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.8](https://github.com/Soli0222/note-tweet-connector/compare/v3.4.7...v3.4.8) (2026-10-31)
+
+
+### バグ修正・依存関係の更新
+
+* **deps:** update go modernc.org/sqlite to v1.61.1 ([#188](https://github.com/Soli0222/note-tweet-connector/issues/188)) ([127c708](https://github.com/Soli0222/note-tweet-connector/commit/127c70861e96b11ea1a92934f722fbef5760fa4e))
+
 ## [3.4.7](https://github.com/Soli0222/note-tweet-connector/compare/v3.4.6...v3.4.7) (2026-10-22)
 
 
